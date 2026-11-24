@@ -1,0 +1,41 @@
+{
+  "mcpServers": {
+    "codex-castor": {
+      "command": "/usr/bin/python3",
+      "args": [
+        "<HOME>/.gemini/config/codex-castor/server.py"
+      ],
+      "env": {
+        "CODEX_BIN": "/path/to/codex",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "timeoutSeconds": -1,
+      "tools": {
+        "codex_dispatch": {
+          "eager": true,
+          "background": "always"
+        },
+        "codex_resume": {
+          "eager": true,
+          "background": "always"
+        },
+        "codex_status": {
+          "eager": true,
+          "background": "off"
+        },
+        "codex_cancel": {
+          "eager": true,
+          "background": "off"
+        },
+        "codex_cleanup_worktree": {
+          "eager": true,
+          "background": "off"
+        },
+        "codex_monitor": {
+          "eager": true,
+          "background": "off"
+        }
+      }
+    }
+  }
+}

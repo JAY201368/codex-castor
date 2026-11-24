@@ -1,0 +1,55 @@
+---
+name: codex-orchestrator
+description: >-
+  Orchestrate asynchronous software implementation by delegating detailed, self-contained
+  specifications to local Codex CLI via the codex-castor MCP server, yielding to idle
+  (zero polling) while Codex executes, and performing independent diff/test acceptance upon
+  wakeup. Use whenever Gemini acts as architect/reviewer and Codex acts as implementation worker.
+---
+
+# Codex Orchestrator SOP
+
+You (Gemini) are the **Architect, Decision-Maker, Task Dispatcher, Independent Reviewer, and User Liaison**.
+Local **Codex CLI** (via the `codex-castor` MCP server) is your **Implementation Worker**, running non-interactively with full permissions (`--dangerously-bypass-approvals-and-sandbox`).
+
+## 1. Before Dispatching: Write a Self-Contained Spec
+
+Codex starts with a fresh context and does not see your conversation with the user. Before calling `codex_dispatch`, inspect the codebase yourself (read key files, conventions, types, existing tests) so your spec removes all ambiguity.
+
+Structure every `spec` with these sections:
+
+1. **Objective**: Concrete goal and user-visible behavior.
+2. **Context & Key Files**: Exact file paths to read, modify, or create, plus relevant architectural conventions.
+3. **Detailed Specification**: Exact function/API/CLI/schema signatures, edge cases, error handling, and data flow.
+4. **Constraints & Non-Goals**: What NOT to change, dependencies to avoid, compatibility guarantees.
+5. **Verification Commands**: Exact build, typecheck, lint, and test commands Codex must run before finishing.
+6. **Acceptance Criteria**: Objective, checkable definition of done.
+
+## 2. Asynchronous Dispatch & Zero-Polling Iron Rule
+
+- Call `mcp_codex-castor_codex_dispatch` (or `call_mcp_tool` with `ServerName: "codex-castor"`, `ToolName: "codex_dispatch"`).
+- Start the Antigravity `toolSummary` for every `codex_dispatch` and `codex_resume` with the model and reasoning effort, for example `[gpt-6.2-sol·high] Implement auth tests`. Use `[default·high]` when the model is left at its default and the effort is high. Use `default` for any unknown default.
+- **Single task in active workspace**: `use_worktree: false` (default) lets Codex edit the active working tree directly.
+- **Parallel tasks (2+ concurrent Codex workers on the same Git repo)** or isolated experiments: **MUST set `use_worktree: true`** so workers operate on separate branches (`codex/<task_id>`) without file conflicts.
+- **ZERO POLLING**:
+  - `codex_dispatch` and `codex_resume` are configured with `"background": "always"` and wake you automatically upon completion.
+  - After dispatching, **NEVER** poll `codex_status` or `codex_monitor`, run `sleep`, or schedule a polling timer.
+  - In the dispatch notice, give the user the `task_id`, scope, model and reasoning effort (explicit settings, known config defaults, or inherited values for a resume), and the worktree branch if enabled. Point them to `python3 scripts/watch.py`, the Antigravity CLI status bar, or Antigravity App’s **Codex Monitor** panel for live updates. The monitor shows Codex’s runtime model and effort once confirmed.
+  - Continue unrelated work or end your turn to wait for the automatic wakeup. Call `codex_status` for a one-time progress check or `codex_monitor` to open or refresh the panel only when the user asks.
+
+## 3. Independent Acceptance Workflow (Upon Wakeup)
+
+When Antigravity wakes you with the completed result from `codex_dispatch` or `codex_resume`:
+
+1. **Read the compact result**: Inspect `status`, `report`, `git.diff_stat`, and `git.status_short`. Do **not** read `events_file` or `stderr_file` unless `status != "completed"` or something looks suspicious.
+2. **Verify code independently**:
+   - Inspect the actual diff (`git diff` or `git diff <base_commit>...<branch>` for worktrees) and read critical changed sections.
+   - Independently execute the build/lint/test commands yourself—never accept Codex's self-report without verification.
+3. **Decide: Accept vs. Rework**:
+   - **If defects, missing edge cases, or test failures exist**:
+     - Do **not** start over with `codex_dispatch`.
+     - Call `codex_resume` with the same `task_id` and concrete, file-and-line-specific `feedback` (including exact failing test output and expected behavior).
+     - Again, enter idle / do other work without polling.
+   - **If accepted**:
+     - If `use_worktree: true`, merge or cherry-pick `codex/<task_id>` into the target branch, re-run verification if needed, and call `codex_cleanup_worktree(task_id=..., delete_branch=true)` once merged.
+     - Present a concise acceptance summary to the user (what changed, verification results, and any follow-up decisions).

@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex Castor Monitor</title>
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #f4e8cd;
+    --card: #fcf2dc;
+    --ink: #241912;
+    --muted: #604b39;
+    --line: #b9a480;
+    --accent: #274c5b;
+    --rubric: #8f2d22;
+    --mono: ui-monospace, "SF Mono", Consolas, monospace;
+    background: var(--color-background-primary, var(--paper));
+    color: var(--color-text-primary, var(--ink));
+    font: 14px/1.45 var(--font-sans, system-ui, sans-serif);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #241f1d;
+    --card: #2d2926;
+    --ink: #f2e7d5;
+    --muted: #d0bca6;
+    --line: #675649;
+    --accent: #9bcfdf;
+    --rubric: #f3aa99;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; }
+  main { max-width: 1280px; margin-inline: auto; padding: clamp(14px, 3vw, 40px); }
+  h1, h2, h3, p { margin: 0; }
+  .masthead {
+    border-top: 3px double var(--color-border-primary, var(--line));
+    border-bottom: 1px solid var(--color-border-primary, var(--line));
+    padding: 12px 0 13px;
+  }
+  .masthead, .toolbar, .controls, .task-head, .model, .details {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 7px 11px;
+  }
+  .masthead, .toolbar { justify-content: space-between; }
+  h1 { font: 600 clamp(1.65rem, 4vw, 2.4rem)/1 Georgia, serif; letter-spacing: -.035em; }
+  .counts, .stamp, .clock, .badge, .details, .feed time, .round { font-family: var(--mono); }
+  .counts { color: var(--color-text-secondary, var(--muted)); font-size: .8rem; }
+  .counts strong { color: var(--accent); }
+  .toolbar { padding-block: 12px; }
+  button {
+    min-height: 32px; padding: 4px 9px; cursor: pointer; border-radius: 4px;
+    border: 1px solid var(--color-border-primary, var(--line));
+    background: var(--color-background-secondary, var(--card)); color: inherit; font: inherit;
+    font-size: .78rem; font-weight: 600;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .6; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #notice { margin: 0 0 12px; font-size: .83rem; color: var(--rubric); }
+  .section + .section { margin-top: 22px; }
+  .section h2 {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .105em; margin-bottom: 8px;
+    color: var(--color-text-secondary, var(--muted)); font-weight: 700;
+  }
+  .grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+  .task {
+    min-width: 0; align-self: start; overflow-wrap: anywhere; padding: 13px;
+    background: var(--color-background-secondary, var(--card));
+    border: 1px solid var(--color-border-primary, var(--line)); border-radius: 6px;
+    box-shadow: 0 1px 2px #20140d16; border-inline-start: 3px solid var(--color-border-primary, var(--line));
+  }
+  .task.is-live { border-inline-start-color: var(--accent); }
+  .task-head { flex-wrap: nowrap; gap: 7px; }
+  .task-head h3 { flex: 1; min-width: 0; font-size: 1rem; line-height: 1.2; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; color: var(--muted); }
+  .is-live .dot { color: var(--accent); animation: pulse 2.4s ease-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 20%, transparent); } }
+  .round { color: var(--color-text-secondary, var(--muted)); font-size: .74rem; }
+  .clock { font-size: .87rem; color: var(--accent); white-space: nowrap; font-weight: 700; }
+  .model { gap: 5px; margin-top: 10px; }
+  .badge, .stamp {
+    padding: 2px 5px; border-radius: 3px; border: 1px solid var(--color-border-primary, var(--line));
+    font-size: .72rem; color: var(--color-text-secondary, var(--muted));
+  }
+  .model-value { font-weight: 700; color: var(--accent); }
+  .override, .cancel { color: var(--rubric); }
+  .details {
+    margin-top: 9px; justify-content: space-between; align-items: flex-start;
+    gap: 3px 8px; font-size: .75rem; color: var(--color-text-secondary, var(--muted));
+  }
+  .activity {
+    margin-top: 9px; padding: 7px 8px; border-inline-start: 2px solid var(--accent);
+    background: var(--color-background-primary, var(--paper)); font-size: .84rem;
+  }
+  .activity strong { display: block; color: var(--accent); font-size: .74rem; margin-bottom: 2px; }
+  .feed { margin-top: 9px; font-size: .8rem; }
+  .feed summary { width: fit-content; cursor: pointer; font-weight: 650; }
+  .feed ol { padding: 0; margin: 5px 0 0; list-style: none; }
+  .feed li { display: grid; grid-template-columns: 8ch minmax(0, 1fr); gap: 7px; padding: 4px 0; }
+  .feed li + li { border-top: 1px dotted var(--color-border-primary, var(--line)); }
+  .feed time { color: var(--color-text-secondary, var(--muted)); font-size: .71rem; }
+  .task-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
+  .state-label { font-size: .75rem; text-transform: capitalize; color: var(--color-text-secondary, var(--muted)); }
+  .cancel[aria-pressed="true"] { border-color: var(--rubric); color: var(--rubric); }
+  .empty { padding: 20px 12px; text-align: center; color: var(--color-text-secondary, var(--muted)); }
+  @media (min-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 1120px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (min-width: 960px) {
+    #tasks:has(.section + .section) {
+      display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+      align-items: start; gap: 22px;
+    }
+    #tasks:has(.section + .section) .section + .section { margin-top: 0; }
+    #tasks:has(.section + .section) .grid { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) { .is-live .dot { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="masthead">
+    <h1>Codex Castor Monitor</h1>
+    <div class="counts"><strong id="active">0 active</strong> · <span id="total">0 total</span></div>
+  </header>
+  <div class="toolbar">
+    <div class="controls" aria-label="Monitor controls">
+      <button type="button" id="filter" aria-pressed="false">Active only</button>
+      <button type="button" id="pause" aria-pressed="false">Pause</button>
+      <button type="button" id="refresh">Refresh</button>
+    </div>
+    <span class="stamp" id="preview" hidden>Preview mode</span>
+  </div>
+  <p id="notice" role="status" hidden></p>
+  <div id="tasks"></div>
+</main>
+<script>
+"use strict";
+
+const protocol = "2026-01-26";
+const parentWindow = window.parent;
+const preview = parentWindow === window || new URLSearchParams(window.location.search).get("demo") === "1";
+const byId = id => document.getElementById(id);
+const tasksView = byId("tasks");
+const refreshButton = byId("refresh");
+const pending = new Map();
+const feedState = new Map();
+const clocks = [];
+let nextId = 2;
+let parentOrigin = "*";
+let ready = false;
+let disposed = false;
+let paused = false;
+let activeOnly = false;
+let selected = "";
+let count = 0;
+let total = 0;
+let tasks = [];
+let confirmTask = null;
+let cancelling = null;
+let pollTimer;
+let tickTimer;
+let resizeObserver;
+let refreshInFlight = false;
+let refreshQueued = false;
+let generation = 0;
+let receivedResult = false;
+
+function post(message) {
+  parentWindow.postMessage({jsonrpc: "2.0", ...message}, parentOrigin);
+}
+
+function call(name, args) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pending.delete(id);
+      post({method: "notifications/cancelled", params: {requestId: id, reason: "Request timed out"}});
+      reject(new Error("Request timed out"));
+    }, 15000);
+    pending.set(id, {resolve, reject, timeout});
+    post({id, method: "tools/call", params: {name, arguments: args}});
+  });
+}
+
+function hostContext(context) {
+  const root = document.documentElement;
+  if (context?.theme === "dark" || context?.theme === "light") root.dataset.theme = context.theme;
+  for (const [key, value] of Object.entries(context?.styles?.variables ?? {})) {
+    if (key.startsWith("--")) {
+      if (typeof value === "string") root.style.setProperty(key, value);
+      else if (value === null) root.style.removeProperty(key);
+    }
+  }
+}
+
+function toolPayload(result) {
+  if (result?.structuredContent) return result.structuredContent;
+  const text = result?.content?.[0]?.text;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+function showNotice(text) {
+  byId("notice").textContent = text;
+  byId("notice").hidden = !text;
+}
+
+function live(task) {
+  return (task.status === "running" || task.status === "starting") && task.alive !== false;
+}
+
+function sameRound(task, other) {
+  return task.task_id === other?.task_id && task.round === other.round;
+}
+
+function setSnapshot(data) {
+  if (!data || !Array.isArray(data.tasks)) return false;
+  const now = performance.now();
+  tasks = data.tasks.slice();
+  if (data.selected_task && !tasks.some(task => task.task_id === data.selected_task.task_id)) {
+    tasks.push(data.selected_task);
+  }
+  const serverTime = Date.parse(data.server_time);
+  tasks = tasks.map(task => {
+    const start = Date.parse(task.round_started_at || task.created_at);
+    const end = live(task) ? serverTime : Date.parse(task.finished_at || task.updated_at);
+    const fallback = Number.isFinite(end - start) ? (end - start) / 1000 : 0;
+    return {...task, receivedAt: now, elapsed: Math.max(0, task.elapsed_seconds ?? fallback)};
+  });
+  count = data.active_count ?? tasks.filter(live).length;
+  total = data.total ?? tasks.length;
+  receivedResult = true;
+  if (!tasks.some(task => sameRound(task, confirmTask) && live(task))) confirmTask = null;
+  render();
+  return true;
+}
+
+function schedule() {
+  clearTimeout(pollTimer);
+  if (ready && !preview && !disposed && !paused && !refreshInFlight) {
+    pollTimer = setTimeout(refresh, count > 0 ? 2000 : 8000);
+  }
+}
+
+async function refresh() {
+  if (preview) { render(); return; }
+  if (!ready || disposed) return;
+  if (refreshInFlight) { refreshQueued = true; return; }
+  clearTimeout(pollTimer);
+  refreshInFlight = true;
+  refreshButton.disabled = true;
+  const requestGeneration = generation;
+  try {
+    const args = selected ? {limit: 20, task_id: selected} : {limit: 20};
+    const result = await call("codex_monitor", args);
+    if (disposed || requestGeneration !== generation) return;
+    if (result?.isError || !setSnapshot(toolPayload(result))) {
+      throw new Error(result?.content?.[0]?.text || "Invalid monitor response");
+    }
+    showNotice("");
+  } catch (error) {
+    if (!disposed && requestGeneration === generation) showNotice(`Refresh failed. ${error.message}`);
+  } finally {
+    refreshInFlight = false;
+    refreshButton.disabled = disposed;
+    if (refreshQueued && !disposed) {
+      refreshQueued = false;
+      refresh();
+    } else {
+      schedule();
+    }
+  }
+}
+
+function node(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function badge(text, flavor = "") {
+  return node("span", `badge ${flavor}`, text);
+}
+
+function sourceLabel(source) {
+  return ({runtime_rollout: "runtime", config_toml: "config", request_override: "override",
+    requested: "override", user_config: "config", project_config: "config",
+    previous_round: "previous round"})[source] || source || "unknown";
+}
+
+function modelStrip(task) {
+  const row = node("div", "model");
+  const model = task.effective_model ?? task.model;
+  const effort = task.effective_reasoning_effort ?? task.reasoning_effort;
+  const sources = [...new Set([sourceLabel(task.model_source), sourceLabel(task.reasoning_effort_source)])];
+  row.append(badge(model || "Unknown model", "model-value"), badge(effort || "Unknown effort", "model-value"),
+    badge(sources.join(" / ")));
+  const defaults = [];
+  if (model && task.config_model && model !== task.config_model) defaults.push(task.config_model);
+  if (effort && task.config_reasoning_effort && effort !== task.config_reasoning_effort) {
+    defaults.push(task.config_reasoning_effort);
+  }
+  if (defaults.length) row.append(badge(`≠ config: ${defaults.join(" · ")}`, "override"));
+  return row;
+}
+
+function feed(task) {
+  const activities = task.recent_activities ?? [];
+  if (!activities.length) return null;
+  const details = node("details", "feed");
+  details.open = feedState.get(task.task_id) ?? live(task);
+  details.dataset.feedTask = task.task_id;
+  details.addEventListener("toggle", () => {
+    if (details.isConnected) feedState.set(task.task_id, details.open);
+  });
+  details.append(node("summary", "", "Recent activity · UTC"));
+  const list = node("ol");
+  for (const entry of activities.slice(-8).reverse()) {
+    const item = node("li");
+    const date = new Date(entry.ts);
+    const stamp = node("time", "", entry.ts && Number.isFinite(date.getTime()) ? date.toISOString().slice(11, 19) : "–");
+    if (stamp.textContent !== "–") stamp.dateTime = date.toISOString();
+    item.append(stamp, node("span", "", entry.text || ""));
+    list.append(item);
+  }
+  details.append(list);
+  return details;
+}
+
+async function cancel(task) {
+  if (!sameRound(task, confirmTask)) {
+    confirmTask = task;
+    render(task.task_id);
+    return;
+  }
+  confirmTask = null;
+  cancelling = task.task_id;
+  render();
+  let errorMessage = "";
+  try {
+    let cancelled = preview;
+    if (!preview) {
+      const result = await call("codex_cancel", {task_id: task.task_id});
+      const payload = toolPayload(result);
+      if (result?.isError || payload?.cancelled === false) {
+        throw new Error(payload?.message || result?.content?.[0]?.text || "Cancellation failed");
+      }
+      cancelled = payload?.cancelled === true;
+    }
+    if (cancelled) {
+      tasks = tasks.map(item => {
+        if (!sameRound(item, task) || !live(item)) return item;
+        count = Math.max(0, count - 1);
+        return {
+          ...item, status: "cancelled", alive: false,
+          elapsed: item.elapsed + (performance.now() - item.receivedAt) / 1000,
+          current_activity: "Task cancelled",
+        };
+      });
+    }
+  } catch (error) {
+    errorMessage = `Cancel failed. ${error.message}`;
+  } finally {
+    if (disposed) return;
+    cancelling = null;
+    render();
+    generation++;
+    if (!preview) await refresh();
+    if (errorMessage && !disposed) showNotice(errorMessage);
+  }
+}
+
+function taskCard(task) {
+  const running = live(task);
+  const card = node("article", running ? "task is-live" : "task");
+  const head = node("div", "task-head");
+  const dot = node("span", "dot");
+  dot.setAttribute("aria-hidden", "true");
+  const clock = node("span", "clock");
+  clock.setAttribute("aria-label", "Elapsed time");
+  clocks.push({element: clock, task});
+  head.append(dot, node("h3", "", task.task_id), node("span", "round", `r${task.round ?? 1}`), clock);
+  card.append(head, modelStrip(task));
+
+  const details = node("div", "details");
+  const location = task.worktree_branch || task.workdir?.split(/[/\\]/).filter(Boolean).pop();
+  if (location) {
+    const path = node("span", "", location);
+    path.title = task.workdir || location;
+    details.append(path);
+  }
+  const input = task.usage?.input_tokens;
+  const output = task.usage?.output_tokens;
+  if (typeof input === "number" || typeof output === "number") {
+    const usage = node("span", "", `${((input ?? 0) + (output ?? 0)).toLocaleString()} tokens`);
+    usage.title = `${input ?? 0} input · ${output ?? 0} output`;
+    details.append(usage);
+  }
+  if (details.childElementCount) card.append(details);
+  const activity = task.current_activity || task.last_event;
+  if (activity || running) {
+    const block = node("div", "activity");
+    block.append(node("strong", "", running ? "Current activity" : "Final activity"),
+      node("span", "", activity || "Waiting for activity"));
+    card.append(block);
+  }
+  const recent = feed(task);
+  if (recent) card.append(recent);
+
+  const footer = node("div", "task-footer");
+  footer.append(node("span", "state-label", task.status || "Unknown"));
+  if (running) {
+    const armed = sameRound(task, confirmTask);
+    const button = node("button", "cancel", cancelling === task.task_id ? "Cancelling…" : armed ? "Confirm?" : "Cancel");
+    button.type = "button";
+    button.disabled = cancelling !== null;
+    button.dataset.cancelTask = task.task_id;
+    button.setAttribute("aria-pressed", String(armed));
+    button.setAttribute("aria-label", `${armed ? "Confirm cancellation of" : "Cancel"} ${task.task_id}`);
+    button.addEventListener("click", () => cancel(task));
+    card.addEventListener("keydown", event => {
+      if (event.key === "Escape" && sameRound(task, confirmTask)) {
+        confirmTask = null;
+        render(task.task_id);
+      }
+    });
+    footer.append(button);
+  }
+  card.append(footer);
+  return card;
+}
+
+function tick() {
+  const now = performance.now();
+  for (const {element, task} of clocks) {
+    const elapsed = task.elapsed + (live(task) ? (now - task.receivedAt) / 1000 : 0);
+    const seconds = Number.isFinite(elapsed) ? Math.floor(elapsed) : 0;
+    const hours = Math.floor(seconds / 3600);
+    const digits = [Math.floor(seconds / 60) % 60, seconds % 60];
+    if (hours) digits.unshift(hours);
+    const text = digits.map(value => String(value).padStart(2, "0")).join(":");
+    if (element.textContent !== text) element.textContent = text;
+  }
+}
+
+function render(focusTask = document.activeElement?.dataset.cancelTask) {
+  const focusFeed = document.activeElement?.parentElement?.dataset.feedTask;
+  for (const details of tasksView.querySelectorAll("details")) {
+    feedState.set(details.dataset.feedTask, details.open);
+  }
+  byId("active").textContent = `${count} active`;
+  byId("total").textContent = `${total} total`;
+  clocks.length = 0;
+  const visible = tasks.filter(task => !selected || task.task_id === selected);
+  const groups = [["Active tasks", visible.filter(live)]];
+  if (!activeOnly) groups.push(["Recent tasks", visible.filter(task => !live(task))]);
+  const sections = [];
+  for (const [heading, members] of groups) {
+    if (!members.length) continue;
+    const section = node("section", "section");
+    const grid = node("div", "grid");
+    for (const task of members) grid.append(taskCard(task));
+    section.append(node("h2", "", heading), grid);
+    sections.push(section);
+  }
+  if (!sections.length) {
+    const message = !receivedResult ? "Connecting to Codex Castor…" :
+      selected ? `No matching tasks for ${selected}.` : activeOnly ? "No active tasks." : "No Codex tasks yet.";
+    sections.push(node("p", "empty", message));
+  }
+  tasksView.replaceChildren(...sections);
+  if (focusTask) {
+    [...tasksView.querySelectorAll("[data-cancel-task]")]
+      .find(button => button.dataset.cancelTask === focusTask)?.focus({preventScroll: true});
+  } else if (focusFeed) {
+    [...tasksView.querySelectorAll("details")]
+      .find(details => details.dataset.feedTask === focusFeed)?.querySelector("summary")?.focus({preventScroll: true});
+  }
+  tick();
+}
+
+function stop() {
+  disposed = true;
+  clearTimeout(pollTimer);
+  clearInterval(tickTimer);
+  resizeObserver?.disconnect();
+  for (const request of pending.values()) {
+    clearTimeout(request.timeout);
+    request.reject(new Error("Monitor closed"));
+  }
+  pending.clear();
+}
+
+window.addEventListener("message", event => {
+  const msg = event.data;
+  if (preview || disposed || event.source !== parentWindow || msg?.jsonrpc !== "2.0") return;
+  if (parentOrigin !== "*" && event.origin !== parentOrigin) return;
+  if (msg.method === "ping" || msg.method === "ui/resource-teardown") {
+    if (msg.id !== undefined) post({id: msg.id, result: {}});
+    if (msg.method === "ui/resource-teardown") stop();
+  } else if (msg.method === "ui/notifications/host-context-changed") {
+    hostContext(msg.params);
+  } else if (msg.method === "ui/notifications/tool-input") {
+    const candidate = msg.params?.arguments?.task_id;
+    const next = typeof candidate === "string" ? candidate : "";
+    if (next !== selected) {
+      selected = next;
+      generation++;
+      render();
+      if (ready && !paused) refresh();
+    }
+  } else if (msg.method === "ui/notifications/tool-result") {
+    if (msg.params?.isError || !setSnapshot(toolPayload(msg.params))) {
+      showNotice(msg.params?.content?.[0]?.text || "Could not load the monitor result.");
+    } else {
+      showNotice("");
+      schedule();
+    }
+  } else if (msg.method === "ui/notifications/tool-cancelled") {
+    showNotice(msg.params?.reason || "The host cancelled the initial monitor request.");
+  } else if (!msg.method && msg.id === 1 && !ready) {
+    if (msg.error) { showNotice(msg.error.message || "Monitor initialization failed."); return; }
+    if (event.origin && event.origin !== "null") parentOrigin = event.origin;
+    hostContext(msg.result?.hostContext);
+    ready = true;
+    post({method: "ui/notifications/initialized", params: {}});
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(() => {
+        post({method: "ui/notifications/size-changed", params: {
+          width: document.documentElement.clientWidth, height: Math.ceil(document.body.getBoundingClientRect().height),
+        }});
+      });
+      resizeObserver.observe(document.body);
+    }
+    if (receivedResult) schedule();
+    else refresh();
+  } else if (!msg.method && pending.has(msg.id)) {
+    const request = pending.get(msg.id);
+    pending.delete(msg.id);
+    clearTimeout(request.timeout);
+    if (msg.error) request.reject(new Error(msg.error.message || "Tool call failed"));
+    else request.resolve(msg.result);
+  }
+});
+
+byId("filter").addEventListener("click", event => {
+  activeOnly = !activeOnly;
+  event.currentTarget.textContent = activeOnly ? "Show all" : "Active only";
+  event.currentTarget.setAttribute("aria-pressed", String(activeOnly));
+  render();
+});
+byId("pause").addEventListener("click", event => {
+  paused = !paused;
+  event.currentTarget.textContent = paused ? "Resume" : "Pause";
+  event.currentTarget.setAttribute("aria-pressed", String(paused));
+  if (paused) clearTimeout(pollTimer);
+  else refresh();
+});
+refreshButton.addEventListener("click", refresh);
+tickTimer = setInterval(tick, 1000);
+
+if (preview) {
+  byId("preview").hidden = false;
+  if (window.matchMedia("(prefers-color-scheme: dark)").matches) hostContext({theme: "dark"});
+  const ago = seconds => new Date(Date.now() - seconds * 1000).toISOString();
+  setSnapshot({
+    server_time: ago(0), active_count: 1, total: 2,
+    tasks: [{
+      task_id: "castor-observability", status: "running", alive: true, round: 1,
+      effective_model: "gpt-6.2-sol", effective_reasoning_effort: "high",
+      config_model: "gpt-6.2-sol", config_reasoning_effort: "xhigh",
+      model_source: "runtime_rollout", reasoning_effort_source: "runtime_rollout",
+      worktree_branch: "codex/castor-observability", elapsed_seconds: 102,
+      current_activity: "▶ python3 -m unittest discover -s tests -v",
+      usage: {input_tokens: 110000, output_tokens: 1730},
+      recent_activities: [
+        {ts: ago(37), text: "💬 Checking task state and runtime settings"},
+        {ts: ago(16), text: "✎ Updated scripts/watch.py and mcp/monitor.html"},
+        {ts: ago(4), text: "▶ python3 -m unittest discover -s tests -v"},
+      ],
+    }, {
+      task_id: "installer-validation", status: "completed", alive: false, round: 2,
+      effective_model: "gpt-6.2-sol", effective_reasoning_effort: "xhigh",
+      model_source: "config", reasoning_effort_source: "config",
+      worktree_branch: "codex/installer-validation", elapsed_seconds: 84,
+      current_activity: "✓ Installer checks passed", usage: {input_tokens: 38000, output_tokens: 600},
+    }],
+  });
+} else {
+  render();
+  post({id: 1, method: "ui/initialize", params: {
+    appInfo: {name: "codex-castor-monitor", version: "1.1.0"},
+    appCapabilities: {availableDisplayModes: ["inline"]},
+    protocolVersion: protocol,
+  }});
+}
+</script>
+</body>
+</html>

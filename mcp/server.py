@@ -1,0 +1,1658 @@
+#!/usr/bin/env python3
+"""Lightweight, zero-dependency MCP stdio server bridging Antigravity (Gemini)
+to local Codex CLI with full permissions and concurrent background task support.
+
+Transport: MCP stdio (newline-delimited JSON-RPC 2.0 on stdin/stdout; logs on stderr).
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import re
+import select
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, BinaryIO, Dict, Iterator, List, Optional, Tuple
+
+SERVER_NAME = "codex-castor"
+SERVER_VERSION = "1.1.0"
+DEFAULT_PROTOCOL_VERSION = "2025-03-26"
+SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", DEFAULT_PROTOCOL_VERSION, "2025-06-18", "2025-11-25")
+
+BASE_DIR = Path(__file__).resolve().parent
+SCHEMA_PATH = BASE_DIR / "report.schema.json"
+MONITOR_URI = "ui://codex-castor/monitor.html"
+MONITOR_MIME = "text/html;profile=mcp-app"
+MONITOR_HTML_PATH = Path(os.environ.get("CODEX_CASTOR_MONITOR_HTML", str(BASE_DIR / "monitor.html")))
+MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui"
+
+STATE_ROOT = Path(os.environ.get("CODEX_CASTOR_STATE_DIR", Path.home() / ".gemini" / "codex-castor"))
+TASKS_ROOT = STATE_ROOT / "tasks"
+WORKTREES_ROOT = STATE_ROOT / "worktrees"
+
+STDOUT_LOCK = threading.Lock()
+LOG_LEVEL_LOCK = threading.Lock()
+CLIENT_LOG_LEVEL: Optional[str] = None
+LOG_LEVELS = ("debug", "info", "notice", "warning", "error", "critical", "alert", "emergency")
+ACTIVE_LOCK = threading.Lock()
+ACTIVE_BY_REQ_ID: Dict[Any, Dict[str, Any]] = {}
+ACTIVE_BY_TASK_ID: Dict[str, Dict[str, Any]] = {}
+CLAIMED_TASKS: set[str] = set()
+MODEL_FIELDS = ("model", "reasoning_effort")
+MODEL_RESULT_FIELDS = tuple(
+    key for field in MODEL_FIELDS for key in (f"effective_{field}", f"{field}_source", f"config_{field}")
+)
+TOKEN_USAGE_FIELDS = (
+    "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+    "output_tokens", "reasoning_output_tokens", "total_tokens",
+)
+
+
+def log_err(msg: str) -> None:
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sys.stderr.write(f"[{ts}] [codex-castor] {msg}\n")
+    sys.stderr.flush()
+
+
+def send_json(payload: Dict[str, Any]) -> None:
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with STDOUT_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+
+def send_result(req_id: Any, result: Dict[str, Any]) -> None:
+    send_json({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+
+def send_error(req_id: Any, code: int, message: str, data: Any = None) -> None:
+    err: Dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    send_json({"jsonrpc": "2.0", "id": req_id, "error": err})
+
+
+def utc_now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def build_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    extra_paths = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        str(Path.home() / ".local" / "bin"),
+        str(Path.home() / ".cargo" / "bin"),
+    ]
+    current = env.get("PATH", "")
+    parts = [p for p in current.split(":") if p]
+    for p in extra_paths:
+        if os.path.isdir(p) and p not in parts:
+            parts.insert(0, p)
+    env["PATH"] = ":".join(parts)
+    return env
+
+
+def resolve_codex_bin() -> str:
+    candidates = [
+        os.environ.get("CODEX_BIN", ""),
+        shutil.which("codex", path=build_env().get("PATH")) or "",
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        str(Path.home() / ".local" / "bin" / "codex"),
+        str(Path.home() / ".npm-global" / "bin" / "codex"),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    raise RuntimeError(
+        "codex executable not found. Set CODEX_BIN env var or ensure codex is in PATH."
+    )
+
+
+def sanitize_task_id(raw: Optional[str]) -> str:
+    if raw:
+        cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw.strip()).strip("-.")
+        if not cleaned:
+            raise ValueError("task_id contains no valid characters")
+        return cleaned[:80]
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{stamp}-{uuid.uuid4().hex[:6]}"
+
+
+def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{threading.get_ident()}")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def read_json_safe(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def run_git(args: List[str], cwd: Path, timeout: int = 30) -> Tuple[int, str, str]:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            env=build_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except Exception as exc:
+        return 1, "", str(exc)
+
+
+def detect_git_root(workdir: Path) -> Optional[Path]:
+    rc, out, _ = run_git(["rev-parse", "--show-toplevel"], workdir)
+    if rc == 0 and out:
+        return Path(out).resolve()
+    return None
+
+
+def codex_home_dir() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
+def nonempty_string(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return value.strip() or None
+    return None
+
+
+def parse_codex_config_toml(path: Path) -> Tuple[Optional[str], Optional[str]]:
+    if not path.is_file():
+        return None, None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None, None
+    try:
+        import tomllib
+
+        config = tomllib.loads(text)
+        return nonempty_string(config.get("model")), nonempty_string(config.get("model_reasoning_effort"))
+    except (ImportError, ValueError):
+        config = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                break
+            match = re.match(r"""^(model|model_reasoning_effort)\s*=\s*["']([^"']+)["']""", line)
+            if match:
+                config[match[1]] = match[2]
+        return nonempty_string(config.get("model")), nonempty_string(config.get("model_reasoning_effort"))
+
+
+def resolve_config_defaults(workdir: Path) -> Dict[str, Optional[str]]:
+    user = parse_codex_config_toml(codex_home_dir() / "config.toml")
+    project = parse_codex_config_toml((detect_git_root(workdir) or workdir) / ".codex" / "config.toml")
+    defaults: Dict[str, Optional[str]] = {}
+    for field, project_value, user_value in zip(MODEL_FIELDS, project, user):
+        defaults[f"config_{field}"] = project_value or user_value
+        defaults[f"config_{field}_source"] = (
+            "project_config" if project_value else "user_config" if user_value else None
+        )
+    return defaults
+
+
+def set_round_model(
+    meta: Dict[str, Any], args: Dict[str, Any], workdir: Path, cmd: List[str],
+) -> None:
+    meta.update(resolve_config_defaults(workdir))
+    for field in MODEL_FIELDS:
+        override = nonempty_string(args.get(field))
+        effective = f"effective_{field}"
+        source = f"{field}_source"
+        if override:
+            meta[field] = override
+            meta[effective] = override
+            meta[source] = "override"
+            if field == "model":
+                cmd.extend(["-m", override])
+            else:
+                cmd.extend(["-c", f"model_reasoning_effort={json.dumps(override, ensure_ascii=False)}"])
+        elif meta.get(effective) or meta.get(field):
+            # Older task metadata only records the last requested override.
+            meta[effective] = meta.get(effective) or meta[field]
+            if meta.get(source) not in ("runtime_rollout", "override"):
+                meta[source] = "previous_round"
+        else:
+            meta.setdefault(field, None)
+            meta[effective] = meta[f"config_{field}"]
+            meta[source] = meta[f"config_{field}_source"] or "unknown"
+
+
+def find_rollout_file(session_id: str) -> Optional[Path]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", session_id):
+        return None
+    sessions = codex_home_dir() / "sessions"
+    today = datetime.date.today()
+    utc_today = datetime.datetime.now(datetime.timezone.utc).date()
+    recent = {day - datetime.timedelta(days=delta) for day in (today, utc_today) for delta in (0, 1)}
+    pattern = f"rollout-*{session_id}*.jsonl"
+    try:
+        matches = [path for day in recent for path in (sessions / day.strftime("%Y/%m/%d")).glob(pattern)
+                   if path.is_file()]
+        if not matches:
+            matches = [path for path in sessions.glob(f"*/*/*/{pattern}") if path.is_file()]
+        return max(matches, default=None)
+    except OSError:
+        return None
+
+
+def rollout_start_position(session_id: str) -> Optional[Tuple[str, int, int]]:
+    path = find_rollout_file(session_id)
+    if path is not None:
+        try:
+            stat = path.stat()
+            return str(path), stat.st_ino, stat.st_size
+        except OSError:
+            pass
+    return None
+
+
+def rollout_lines_from_end(stream: BinaryIO, start: int, end: int) -> Iterator[bytes]:
+    pending = b""
+    while end > start:
+        chunk_start = max(start, end - 65536)
+        stream.seek(chunk_start)
+        pending, *lines = (stream.read(end - chunk_start) + pending).split(b"\n")
+        yield from reversed(lines)
+        end = chunk_start
+    if pending:
+        yield pending
+
+
+def probe_rollout_runtime(
+    session_id: str, *, round_start: Optional[Tuple[str, int, int]] = None,
+) -> Optional[Dict[str, Any]]:
+    path = find_rollout_file(session_id)
+    if path is None:
+        return None
+    turn = None
+    token_count = None
+    found = False
+    try:
+        with path.open("rb") as stream:
+            stat = os.fstat(stream.fileno())
+            start = 0
+            if round_start and round_start[0] == str(path) and round_start[1] == stat.st_ino:
+                if stat.st_size >= round_start[2]:
+                    start = round_start[2]
+            for line in rollout_lines_from_end(stream, start, stat.st_size):
+                try:
+                    event = json.loads(line)
+                except (ValueError, UnicodeError):
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                found = True
+                payload = event.get("payload")
+                if turn is None and event.get("type") == "turn_context":
+                    turn = payload if isinstance(payload, dict) else {}
+                elif token_count is None and event.get("type") == "event_msg" and isinstance(payload, dict):
+                    if payload.get("type") == "token_count":
+                        token_count = payload
+                if turn is not None and token_count is not None:
+                    break
+    except OSError:
+        return None
+    if not found:
+        return None
+
+    turn = turn or {}
+    mode = turn.get("collaboration_mode")
+    settings = mode.get("settings") if isinstance(mode, dict) else None
+    settings = settings if isinstance(settings, dict) else {}
+    info = (token_count or {}).get("info")
+    total = info.get("total_token_usage") if isinstance(info, dict) else None
+    usage = {}
+    if isinstance(total, dict):
+        usage = {key: total[key] for key in TOKEN_USAGE_FIELDS if type(total.get(key)) is int}
+    return {
+        "model": nonempty_string(turn.get("model")) or nonempty_string(settings.get("model")),
+        "reasoning_effort": nonempty_string(turn.get("effort")) or nonempty_string(settings.get("reasoning_effort")),
+        "usage": usage or None,
+    }
+
+
+def refresh_rollout_metadata(meta: Dict[str, Any]) -> bool:
+    session_id = meta.get("session_id")
+    if not isinstance(session_id, str):
+        return False
+    runtime = probe_rollout_runtime(session_id, round_start=meta.get("_rollout_round_start"))
+    if not runtime:
+        return False
+    updates = {}
+    for field in MODEL_FIELDS:
+        if runtime[field]:
+            updates[f"effective_{field}"] = runtime[field]
+            updates[f"{field}_source"] = "runtime_rollout"
+    if runtime["usage"] is not None and not meta.get("_turn_usage_reported"):
+        updates["usage"] = runtime["usage"]
+    changed = any(meta.get(key) != value for key, value in updates.items())
+    meta.update(updates)
+    return changed
+
+
+def is_pid_alive(pid: Optional[int]) -> bool:
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def terminate_process_group(proc: Optional[subprocess.Popen], pid: Optional[int] = None) -> bool:
+    target_pid = proc.pid if proc is not None else pid
+    if not target_pid or target_pid <= 0:
+        return False
+    try:
+        pgid = os.getpgid(target_pid)
+    except Exception:
+        pgid = target_pid
+
+    sent = False
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        sent = True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        try:
+            os.kill(target_pid, signal.SIGTERM)
+            sent = True
+        except Exception:
+            return False
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return True
+        if proc is None and not is_pid_alive(target_pid):
+            return True
+        time.sleep(0.1)
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except Exception:
+        try:
+            os.kill(target_pid, signal.SIGKILL)
+        except Exception:
+            pass
+    return sent
+
+
+def collect_git_summary(workdir: Path, base_commit: Optional[str] = None) -> Dict[str, Any]:
+    git_root = detect_git_root(workdir)
+    if git_root is None:
+        return {"is_git_repo": False}
+
+    _, branch, _ = run_git(["rev-parse", "--abbrev-ref", "HEAD"], workdir)
+    _, head, _ = run_git(["rev-parse", "--short", "HEAD"], workdir)
+    _, status_short, _ = run_git(["status", "--short"], workdir)
+
+    diff_stat = ""
+    if base_commit:
+        rc, out, _ = run_git(["diff", "--stat", base_commit], workdir)
+        if rc == 0:
+            diff_stat = out
+    else:
+        rc, out, _ = run_git(["diff", "--stat", "HEAD"], workdir)
+        if rc == 0:
+            diff_stat = out
+
+    def truncate_lines(text: str, max_lines: int = 40) -> str:
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        if len(lines) <= max_lines:
+            return "\n".join(lines)
+        return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines)"
+
+    return {
+        "is_git_repo": True,
+        "branch": branch,
+        "head": head,
+        "diff_stat": truncate_lines(diff_stat),
+        "status_short": truncate_lines(status_short),
+    }
+
+
+def parse_report_file(report_path: Path, fallback_text: str) -> Any:
+    if report_path.is_file():
+        raw = report_path.read_text(encoding="utf-8", errors="replace").strip()
+        if raw:
+            try:
+                return json.loads(raw)
+            except Exception:
+                return {"raw_message": raw[:4000]}
+    if fallback_text:
+        try:
+            return json.loads(fallback_text)
+        except Exception:
+            return {"raw_message": fallback_text[:4000]}
+    return None
+
+
+def compact_text(value: Any, limit: int = 120) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def clean_shell_command(cmd: str) -> str:
+    if re.match(r"^\s*(?:/bin/)?(?:zsh|bash|sh)\s+-l?c\s", cmd):
+        try:
+            parts = shlex.split(cmd)
+        except ValueError:
+            parts = []
+        if len(parts) == 3:
+            cmd = parts[2]
+    return compact_text(cmd)
+
+
+def summarize_event(ev: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    ev_type = ev.get("type", "")
+    if ev_type == "thread.started":
+        return "turn", f"session {str(ev.get('thread_id') or '')[:8]}"
+    if ev_type in ("turn.started", "turn.completed"):
+        return "turn", ev_type
+    if ev_type == "turn.failed":
+        return "error", ev_type
+    if ev_type == "error" and "is ignoring" not in str(ev.get("message", "")):
+        return "error", f"⚠ {compact_text(ev.get('message'), 140)}"
+    item = ev.get("item")
+    if ev_type not in ("item.started", "item.completed") or not isinstance(item, dict):
+        return None
+    starting = ev_type == "item.started"
+    kind = item.get("type")
+    if kind == "command_execution":
+        command = clean_shell_command(str(item.get("command") or ""))
+        if starting:
+            return "cmd_start", f"▶ {command}"
+        rc = item.get("exit_code")
+        marker = "✓" if rc == 0 else f"✗(rc={rc})"
+        return "cmd_done", f"{marker} {command}"
+    if kind == "file_change":
+        changes = item.get("changes") or []
+        paths = [str(change["path"]) for change in changes if isinstance(change, dict) and change.get("path")]
+        preview = compact_text(", ".join(paths[:3]) + (", …" if len(paths) > 3 else "")) or "files"
+        if starting:
+            return "file", f"✎ editing {preview}"
+        return "file", f"✎ changed {len(changes)} file(s): {preview}"
+    if starting:
+        if kind == "mcp_tool_call":
+            return "tool", f"⚙ {compact_text(item.get('tool') or item.get('name'))}"
+        if kind == "web_search":
+            return "search", f"🔎 {compact_text(item.get('query'))}"
+        if kind == "reasoning":
+            return "thinking", "💭 reasoning..."
+    elif kind == "agent_message":
+        return "message", f"💬 {compact_text(item.get('text'))}"
+    elif kind == "error":
+        message = str(item.get("message") or "")
+        if "is ignoring" not in message and "--dangerously-bypass-hook-trust" not in message:
+            return "error", f"⚠ {compact_text(message, 140)}"
+    return None
+
+
+def format_model_tag(meta: Dict[str, Any]) -> str:
+    model = meta.get("effective_model")
+    effort = meta.get("effective_reasoning_effort")
+    return f"{model}·{effort}" if model and effort else model or "codex"
+
+
+def notify_activity(meta: Dict[str, Any], progress_token: Any, progress: int) -> None:
+    message = f"[{meta['task_id']} · {format_model_tag(meta)}] {meta['current_activity']}"
+    if progress_token is not None:
+        send_json({
+            "jsonrpc": "2.0", "method": "notifications/progress",
+            "params": {"progressToken": progress_token, "progress": progress, "message": message},
+        })
+    with LOG_LEVEL_LOCK:
+        if CLIENT_LOG_LEVEL in ("debug", "info"):
+            send_json({
+                "jsonrpc": "2.0", "method": "notifications/message",
+                "params": {"level": "info", "logger": SERVER_NAME, "data": message},
+            })
+
+
+@contextmanager
+def claim_task(task_id: str) -> Iterator[None]:
+    with ACTIVE_LOCK:
+        if task_id in CLAIMED_TASKS:
+            raise ValueError(f"Task '{task_id}' is currently running. Wait for it or cancel it first.")
+        CLAIMED_TASKS.add(task_id)
+    try:
+        yield
+    finally:
+        with ACTIVE_LOCK:
+            CLAIMED_TASKS.remove(task_id)
+
+
+def iter_codex_stdout(stream: BinaryIO) -> Iterator[Optional[bytes]]:
+    pending = b""
+    while True:
+        # Check the rollout while Codex is working without publishing stdout events.
+        if not select.select([stream], [], [], 2.0)[0]:
+            yield None
+            continue
+        chunk = stream.read(65536)
+        if not chunk:
+            if pending:
+                yield pending
+            return
+        *lines, pending = (pending + chunk).split(b"\n")
+        for line in lines:
+            yield line + b"\n"
+
+
+def execute_codex_round(
+    *,
+    req_id: Any,
+    task_id: str,
+    round_num: int,
+    cmd: List[str],
+    prompt_file: Path,
+    effective_workdir: Path,
+    task_dir: Path,
+    meta: Dict[str, Any],
+    progress_token: Any = None,
+) -> Dict[str, Any]:
+    events_path = task_dir / f"events-r{round_num}.jsonl"
+    stderr_path = task_dir / f"stderr-r{round_num}.log"
+    report_path = task_dir / f"report-r{round_num}.json"
+    meta_path = task_dir / "meta.json"
+
+    started_mono = time.monotonic()
+    started_at = utc_now_iso()
+    meta.update(
+        {
+            "status": "running",
+            "round": round_num,
+            "updated_at": started_at,
+            "round_started_at": started_at,
+            "finished_at": None,
+            "current_events_file": str(events_path),
+            "current_stderr_file": str(stderr_path),
+            "current_report_file": str(report_path),
+            "event_count": 0,
+            "last_event": "launching",
+            "current_activity": "launching",
+            "recent_activities": [],
+            "exit_code": None,
+            "pid": None,
+            "usage": None,
+            "_turn_usage_reported": False,
+        }
+    )
+    atomic_write_json(meta_path, meta)
+
+    cancel_flag = threading.Event()
+    proc: Optional[subprocess.Popen] = None
+    last_agent_message = ""
+    fatal_errors: List[str] = []
+    event_count = 0
+    last_rollout_probe = float("-inf")
+
+    try:
+        with prompt_file.open("rb") as stdin_f, stderr_path.open("wb") as stderr_f:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(effective_workdir),
+                stdin=stdin_f,
+                stdout=subprocess.PIPE,
+                stderr=stderr_f,
+                env=build_env(),
+                start_new_session=True,
+                bufsize=0,
+            )
+
+            entry = {
+                "req_id": req_id,
+                "task_id": task_id,
+                "proc": proc,
+                "cancel_flag": cancel_flag,
+            }
+            with ACTIVE_LOCK:
+                ACTIVE_BY_REQ_ID[req_id] = entry
+                ACTIVE_BY_TASK_ID[task_id] = entry
+
+            meta["pid"] = proc.pid
+            meta["updated_at"] = utc_now_iso()
+            atomic_write_json(meta_path, meta)
+            notify_activity(meta, progress_token, 0)
+
+            assert proc.stdout is not None
+            with events_path.open("wb") as ev_f:
+                for raw_line in iter_codex_stdout(proc.stdout):
+                    if raw_line is None:
+                        now = time.monotonic()
+                        if meta.get("session_id") and now - last_rollout_probe >= 2.0:
+                            last_rollout_probe = now
+                            if refresh_rollout_metadata(meta):
+                                meta["updated_at"] = utc_now_iso()
+                                atomic_write_json(meta_path, meta)
+                        continue
+                    ev_f.write(raw_line)
+                    ev_f.flush()
+                    event_count += 1
+
+                    line_str = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line_str:
+                        continue
+                    try:
+                        ev = json.loads(line_str)
+                    except Exception:
+                        continue
+
+                    if not isinstance(ev, dict):
+                        continue
+
+                    ev_type = ev.get("type")
+                    if ev_type == "thread.started" and ev.get("thread_id"):
+                        meta["session_id"] = ev["thread_id"]
+                    elif ev_type == "turn.completed" and isinstance(ev.get("usage"), dict):
+                        meta["usage"] = ev["usage"]
+                        meta["_turn_usage_reported"] = True
+                    elif ev_type == "turn.failed":
+                        err_obj = ev.get("error")
+                        message = err_obj.get("message") if isinstance(err_obj, dict) else err_obj
+                        fatal_errors.append(str(message or ev.get("message") or "turn.failed"))
+                    elif ev_type == "error":
+                        msg = str(ev.get("message", ""))
+                        if msg and "is ignoring" not in msg:
+                            fatal_errors.append(msg)
+                    elif ev_type == "item.completed":
+                        item = ev.get("item")
+                        if isinstance(item, dict) and item.get("type") == "agent_message" and item.get("text"):
+                            last_agent_message = str(item["text"])
+
+                    now = time.monotonic()
+                    if (
+                        meta.get("session_id")
+                        and ev_type in ("turn.started", "item.started", "item.completed")
+                        and now - last_rollout_probe >= 2.0
+                    ):
+                        refresh_rollout_metadata(meta)
+                        last_rollout_probe = now
+                    summary = summarize_event(ev)
+                    meta["event_count"] = event_count
+                    meta["updated_at"] = utc_now_iso()
+                    if summary:
+                        kind, activity = summary
+                        meta["last_event"] = meta["current_activity"] = activity
+                        activities = meta["recent_activities"]
+                        activities.append({"ts": meta["updated_at"], "kind": kind, "text": activity})
+                        del activities[:-12]
+                    if summary or ev_type in ("item.started", "item.completed"):
+                        atomic_write_json(meta_path, meta)
+                    if summary:
+                        notify_activity(meta, progress_token, event_count)
+
+            exit_code = proc.wait()
+        refresh_rollout_metadata(meta)
+        duration = round(time.monotonic() - started_mono, 2)
+        if cancel_flag.is_set():
+            final_status = "cancelled"
+        elif exit_code == 0 and not fatal_errors:
+            final_status = "completed"
+        else:
+            final_status = "failed"
+
+        meta.update(
+            {
+                "status": final_status,
+                "exit_code": exit_code,
+                "pid": None,
+                "event_count": event_count,
+                "duration_seconds": duration,
+                "current_activity": f"{final_status} ({duration}s)",
+                "updated_at": utc_now_iso(),
+                "finished_at": utc_now_iso(),
+            }
+        )
+        meta.pop("_rollout_round_start", None)
+        meta.pop("_turn_usage_reported", None)
+        atomic_write_json(meta_path, meta)
+        notify_activity(meta, progress_token, event_count + 1)
+    finally:
+        if proc is not None and proc.stdout is not None:
+            proc.stdout.close()
+        with ACTIVE_LOCK:
+            ACTIVE_BY_REQ_ID.pop(req_id, None)
+            if ACTIVE_BY_TASK_ID.get(task_id, {}).get("req_id") == req_id:
+                ACTIVE_BY_TASK_ID.pop(task_id, None)
+
+    report = parse_report_file(report_path, last_agent_message)
+    base_commit = meta.get("worktree", {}).get("base_commit")
+    git_summary = collect_git_summary(effective_workdir, base_commit=base_commit)
+
+    stderr_tail = ""
+    if stderr_path.is_file():
+        stderr_lines = stderr_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if stderr_lines and final_status != "completed":
+            stderr_tail = "\n".join(stderr_lines[-20:])
+
+    result_payload: Dict[str, Any] = {
+        "task_id": task_id,
+        "round": round_num,
+        "status": final_status,
+        "exit_code": exit_code,
+        "session_id": meta.get("session_id"),
+        "workdir": str(effective_workdir),
+        "worktree": meta.get("worktree"),
+        "duration_seconds": duration,
+        "usage": meta.get("usage"),
+        **{key: meta.get(key) for key in MODEL_RESULT_FIELDS},
+        "report": report,
+        "git": git_summary,
+        "artifacts": {
+            "task_dir": str(task_dir),
+            "prompt_file": str(prompt_file),
+            "report_file": str(report_path),
+            "events_file": str(events_path),
+            "stderr_file": str(stderr_path),
+        },
+    }
+    if fatal_errors:
+        result_payload["errors"] = fatal_errors[-5:]
+    if stderr_tail:
+        result_payload["stderr_tail"] = stderr_tail
+    return result_payload
+
+
+def handle_codex_dispatch(
+    req_id: Any, args: Dict[str, Any], progress_token: Any = None,
+) -> Tuple[Dict[str, Any], bool]:
+    workdir_raw = args.get("workdir")
+    if not workdir_raw or not isinstance(workdir_raw, str):
+        raise ValueError("workdir (absolute path) is required")
+    workdir = Path(workdir_raw).expanduser().resolve()
+    if not workdir.is_dir():
+        raise ValueError(f"workdir does not exist or is not a directory: {workdir}")
+
+    spec_text = args.get("spec")
+    spec_file_raw = args.get("spec_file")
+    if spec_file_raw:
+        src = Path(spec_file_raw).expanduser().resolve()
+        if not src.is_file():
+            raise ValueError(f"spec_file does not exist: {src}")
+        spec_content = src.read_text(encoding="utf-8")
+    elif isinstance(spec_text, str) and spec_text.strip():
+        spec_content = spec_text
+    else:
+        raise ValueError("Either 'spec' (non-empty string) or 'spec_file' is required")
+
+    custom_id = args.get("task_id")
+    task_id = sanitize_task_id(custom_id)
+    task_dir = TASKS_ROOT / task_id
+    if task_dir.exists():
+        if custom_id:
+            raise ValueError(
+                f"task_id '{task_id}' already exists. Choose a new task_id or use codex_resume."
+            )
+        task_id = f"{task_id}-{uuid.uuid4().hex[:4]}"
+        task_dir = TASKS_ROOT / task_id
+
+    task_dir.mkdir(parents=True, exist_ok=False)
+    spec_path = task_dir / "spec.md"
+    spec_path.write_text(spec_content, encoding="utf-8")
+
+    use_worktree = bool(args.get("use_worktree", False))
+    base_ref = str(args.get("base_ref") or "HEAD")
+    worktree_info: Dict[str, Any] = {
+        "enabled": False,
+        "repo_root": None,
+        "path": None,
+        "branch": None,
+        "base_commit": None,
+    }
+    effective_workdir = workdir
+
+    if use_worktree:
+        repo_root = detect_git_root(workdir)
+        if repo_root is None:
+            raise ValueError(f"use_worktree=true requires a Git repository, but {workdir} is not in one")
+        rc, base_commit, err = run_git(["rev-parse", "--verify", base_ref], repo_root)
+        if rc != 0 or not base_commit:
+            raise ValueError(f"Failed to resolve base_ref '{base_ref}': {err}")
+
+        rel_subdir = os.path.relpath(workdir, repo_root)
+        wt_path = WORKTREES_ROOT / task_id
+        branch_name = f"codex/{task_id}"
+        WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
+        rc, _, err = run_git(
+            ["worktree", "add", "-b", branch_name, str(wt_path), base_commit],
+            repo_root,
+            timeout=60,
+        )
+        if rc != 0:
+            raise ValueError(f"git worktree add failed: {err}")
+
+        effective_workdir = wt_path if rel_subdir == "." else (wt_path / rel_subdir)
+        worktree_info = {
+            "enabled": True,
+            "repo_root": str(repo_root),
+            "path": str(wt_path),
+            "branch": branch_name,
+            "base_commit": base_commit,
+        }
+
+    codex_bin = resolve_codex_bin()
+    report_path = task_dir / "report-r1.json"
+
+    cmd: List[str] = [
+        codex_bin,
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--dangerously-bypass-hook-trust",
+        "--skip-git-repo-check",
+        "-C",
+        str(effective_workdir),
+        "--output-schema",
+        str(SCHEMA_PATH),
+        "-o",
+        str(report_path),
+        "--json",
+    ]
+
+    meta: Dict[str, Any] = {
+        "task_id": task_id,
+        "created_at": utc_now_iso(),
+        "updated_at": utc_now_iso(),
+        "finished_at": None,
+        "status": "starting",
+        "round": 1,
+        "session_id": None,
+        "requested_workdir": str(workdir),
+        "effective_workdir": str(effective_workdir),
+        "worktree": worktree_info,
+        "pid": None,
+    }
+    set_round_model(meta, args, effective_workdir, cmd)
+
+    extra_dirs = args.get("extra_writable_dirs")
+    if isinstance(extra_dirs, list):
+        for d in extra_dirs:
+            if isinstance(d, str) and d.strip():
+                cmd.extend(["--add-dir", str(Path(d).expanduser().resolve())])
+    cmd.append("-")
+
+    with claim_task(task_id):
+        payload = execute_codex_round(
+            req_id=req_id,
+            task_id=task_id,
+            round_num=1,
+            cmd=cmd,
+            prompt_file=spec_path,
+            effective_workdir=effective_workdir,
+            task_dir=task_dir,
+            meta=meta,
+            progress_token=progress_token,
+        )
+    return payload, payload["status"] == "failed"
+
+
+def handle_codex_resume(
+    req_id: Any, args: Dict[str, Any], progress_token: Any = None,
+) -> Tuple[Dict[str, Any], bool]:
+    task_id_raw = args.get("task_id")
+    session_id = args.get("session_id")
+    workdir_raw = args.get("workdir")
+    if not task_id_raw and (not session_id or not workdir_raw):
+        raise ValueError("Provide either 'task_id', or both 'session_id' and 'workdir'")
+    task_id = sanitize_task_id(str(task_id_raw) if task_id_raw else f"resume-{str(session_id)[:8]}")
+    with claim_task(task_id):
+        payload = resume_codex_round(req_id, args, task_id, progress_token)
+    return payload, payload["status"] == "failed"
+
+
+def resume_codex_round(
+    req_id: Any, args: Dict[str, Any], task_id: str, progress_token: Any,
+) -> Dict[str, Any]:
+    session_id = args.get("session_id")
+    task_dir = TASKS_ROOT / task_id
+    meta: Dict[str, Any]
+    if args.get("task_id"):
+        loaded = read_json_safe(task_dir / "meta.json")
+        if not loaded:
+            raise ValueError(f"Unknown task_id: {task_id}")
+        if is_pid_alive(loaded.get("pid")):
+            raise ValueError(f"Task '{task_id}' is currently running. Wait for it or cancel it first.")
+        meta = loaded
+        session_id = session_id or meta.get("session_id")
+        effective_workdir = Path(meta["effective_workdir"]).resolve()
+        round_num = int(meta.get("round", 1)) + 1
+    else:
+        task_dir.mkdir(parents=True, exist_ok=True)
+        effective_workdir = Path(str(args["workdir"])).expanduser().resolve()
+        round_num = 1
+        meta = {
+            "task_id": task_id,
+            "created_at": utc_now_iso(),
+            "updated_at": utc_now_iso(),
+            "status": "starting",
+            "round": 1,
+            "session_id": str(session_id),
+            "requested_workdir": str(effective_workdir),
+            "effective_workdir": str(effective_workdir),
+            "worktree": {"enabled": False, "repo_root": None, "path": None, "branch": None, "base_commit": None},
+        }
+
+    if not session_id:
+        raise ValueError(f"No Codex session_id recorded for task '{task_id}'; cannot resume.")
+    if not effective_workdir.is_dir():
+        raise ValueError(f"Working directory no longer exists: {effective_workdir}")
+
+    feedback_text = args.get("feedback")
+    feedback_file_raw = args.get("feedback_file")
+    if feedback_file_raw:
+        src = Path(feedback_file_raw).expanduser().resolve()
+        if not src.is_file():
+            raise ValueError(f"feedback_file does not exist: {src}")
+        feedback_content = src.read_text(encoding="utf-8")
+    elif isinstance(feedback_text, str) and feedback_text.strip():
+        feedback_content = feedback_text
+    else:
+        raise ValueError("Either 'feedback' (non-empty string) or 'feedback_file' is required")
+
+    prompt_path = task_dir / f"feedback-r{round_num}.md"
+    prompt_path.write_text(feedback_content, encoding="utf-8")
+    report_path = task_dir / f"report-r{round_num}.json"
+
+    codex_bin = resolve_codex_bin()
+    cmd: List[str] = [
+        codex_bin,
+        "exec",
+        "resume",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--dangerously-bypass-hook-trust",
+        "--all",
+        "--skip-git-repo-check",
+        "--output-schema",
+        str(SCHEMA_PATH),
+        "-o",
+        str(report_path),
+        "--json",
+    ]
+
+    set_round_model(meta, args, effective_workdir, cmd)
+    cmd.extend([str(session_id), "-"])
+    meta["session_id"] = str(session_id)
+    # A resumed session appends to its rollout. Only entries written this round confirm its settings.
+    meta["_rollout_round_start"] = rollout_start_position(str(session_id))
+
+    return execute_codex_round(
+        req_id=req_id,
+        task_id=task_id,
+        round_num=round_num,
+        cmd=cmd,
+        prompt_file=prompt_path,
+        effective_workdir=effective_workdir,
+        task_dir=task_dir,
+        meta=meta,
+        progress_token=progress_token,
+    )
+
+
+def task_is_alive(meta: Dict[str, Any], task_dir: Path) -> bool:
+    with ACTIVE_LOCK:
+        claimed = meta.get("task_id", task_dir.name) in CLAIMED_TASKS
+    return meta.get("status") == "running" and (claimed or is_pid_alive(meta.get("pid")))
+
+
+def build_task_summary(meta: Dict[str, Any], alive: bool, task_dir: Path) -> Dict[str, Any]:
+    if alive:
+        meta = meta.copy()
+        refresh_rollout_metadata(meta)
+    status = meta.get("status")
+    if status == "running" and not alive:
+        status = "interrupted"
+
+    elapsed = meta.get("duration_seconds")
+    if alive:
+        started_at = meta.get("round_started_at") or meta.get("created_at")
+        elapsed = None
+        if isinstance(started_at, str):
+            try:
+                start = datetime.datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                elapsed = round(max(0, (datetime.datetime.now(datetime.timezone.utc) - start).total_seconds()), 2)
+            except (ValueError, TypeError):
+                pass
+
+    fields = (
+        "round", "session_id", "worktree", "model", "reasoning_effort", *MODEL_RESULT_FIELDS,
+        "last_event", "event_count", "created_at", "round_started_at", "updated_at", "finished_at",
+        "usage", "exit_code",
+    )
+    return {
+        **{field: meta.get(field) for field in fields},
+        "task_id": meta.get("task_id", task_dir.name),
+        "status": status,
+        "alive": alive,
+        "workdir": meta.get("effective_workdir"),
+        "worktree_branch": (meta.get("worktree") or {}).get("branch"),
+        "current_activity": meta.get("current_activity") or meta.get("last_event"),
+        "recent_activities": meta.get("recent_activities") or [],
+        "elapsed_seconds": elapsed,
+    }
+
+
+def list_task_metadata() -> List[Tuple[Path, Dict[str, Any], bool]]:
+    tasks = []
+    if TASKS_ROOT.is_dir():
+        for task_dir in TASKS_ROOT.iterdir():
+            meta = read_json_safe(task_dir / "meta.json")
+            if meta:
+                tasks.append((task_dir, meta, task_is_alive(meta, task_dir)))
+    return tasks
+
+
+def task_limit(args: Dict[str, Any]) -> int:
+    limit = args.get("limit", 20)
+    if type(limit) is not int or limit < 0:
+        raise ValueError("limit must be a non-negative integer")
+    return limit
+
+
+def handle_codex_status(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    task_id_raw = args.get("task_id")
+    if task_id_raw:
+        task_id = sanitize_task_id(str(task_id_raw))
+        task_dir = TASKS_ROOT / task_id
+        meta = read_json_safe(task_dir / "meta.json")
+        if not meta:
+            return {"error": f"Task not found: {task_id}"}, True
+
+        summary = build_task_summary(meta, task_is_alive(meta, task_dir), task_dir)
+        recent_events = [entry["text"] for entry in summary["recent_activities"][-8:]]
+        if "recent_activities" not in meta:
+            # Pre-v1.1 tasks only stored their activity in the event log.
+            events_file = meta.get("current_events_file")
+            if events_file and Path(events_file).is_file():
+                for line in Path(events_file).read_text(encoding="utf-8", errors="replace").splitlines()[-30:]:
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    activity = summarize_event(event) if isinstance(event, dict) else None
+                    if activity:
+                        recent_events.append(activity[1])
+
+        stderr_tail = ""
+        err_file = meta.get("current_stderr_file")
+        if err_file and Path(err_file).is_file():
+            stderr_tail = "\n".join(Path(err_file).read_text(encoding="utf-8", errors="replace").splitlines()[-15:])
+        return {**summary, "recent_events": recent_events[-8:], "stderr_tail": stderr_tail}, False
+
+    limit = task_limit(args)
+    tasks = list_task_metadata()
+    tasks.sort(key=lambda item: str(item[1].get("updated_at") or ""), reverse=True)
+    summaries = [build_task_summary(meta, alive, task_dir) for task_dir, meta, alive in tasks[:limit]]
+    return {"tasks": summaries, "total": len(tasks)}, False
+
+
+def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    limit = task_limit(args)
+    selected_id = sanitize_task_id(str(args["task_id"])) if args.get("task_id") else None
+    tasks = list_task_metadata()
+    tasks.sort(key=lambda item: (item[2], str(item[1].get("updated_at") or "")), reverse=True)
+    summaries = []
+    selected = None
+    for index, (task_dir, meta, alive) in enumerate(tasks):
+        is_selected = meta.get("task_id", task_dir.name) == selected_id
+        if index < limit or is_selected:
+            summary = build_task_summary(meta, alive, task_dir)
+            if index < limit:
+                summaries.append(summary)
+            if is_selected:
+                selected = summary
+
+    active_count = sum(alive for _, _, alive in tasks)
+    result = {
+        "server_time": utc_now_iso(),
+        "active_count": active_count,
+        "total": len(tasks),
+        "tasks": summaries,
+        "selected_task": selected,
+    }
+    lines = [f"Codex Monitor: {active_count} active, {len(tasks)} total"]
+    visible = summaries + ([selected] if selected and selected not in summaries else [])
+    for task in visible:
+        elapsed = task["elapsed_seconds"]
+        duration = f" {elapsed:g}s" if elapsed is not None else ""
+        activity = task["current_activity"] or "—"
+        lines.append(
+            f"[{task['status']}] {task['task_id']} ({format_model_tag(task)}){duration} · {activity}"
+        )
+    return result, "\n".join(lines)
+
+
+def handle_codex_cancel(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    task_id_raw = args.get("task_id")
+    if not task_id_raw:
+        raise ValueError("task_id is required")
+    task_id = sanitize_task_id(str(task_id_raw))
+    task_dir = TASKS_ROOT / task_id
+    meta_path = task_dir / "meta.json"
+    meta = read_json_safe(meta_path)
+
+    with ACTIVE_LOCK:
+        entry = ACTIVE_BY_TASK_ID.get(task_id)
+
+    killed = False
+    if entry is not None:
+        entry["cancel_flag"].set()
+        killed = terminate_process_group(entry["proc"])
+    elif meta and meta.get("status") == "running" and is_pid_alive(meta.get("pid")):
+        pid = meta["pid"]
+        killed = terminate_process_group(None, pid=pid)
+        latest = read_json_safe(meta_path)
+        if killed and latest and latest.get("status") == "running" and latest.get("pid") == pid:
+            now = utc_now_iso()
+            latest.update(status="cancelled", pid=None, current_activity="cancelled", updated_at=now, finished_at=now)
+            atomic_write_json(meta_path, latest)
+
+    return {
+        "task_id": task_id,
+        "cancelled": killed,
+        "message": "Terminated running Codex process." if killed else "No active Codex process found for this task_id.",
+    }, False
+
+
+def handle_codex_cleanup_worktree(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    task_id_raw = args.get("task_id")
+    if not task_id_raw:
+        raise ValueError("task_id is required")
+    task_id = sanitize_task_id(str(task_id_raw))
+    task_dir = TASKS_ROOT / task_id
+    meta_path = task_dir / "meta.json"
+    meta = read_json_safe(meta_path)
+    if not meta:
+        return {"error": f"Task not found: {task_id}"}, True
+
+    wt = meta.get("worktree") or {}
+    if not wt.get("enabled"):
+        return {"task_id": task_id, "cleaned": False, "message": "Task did not use a managed worktree."}, False
+
+    repo_root = Path(wt["repo_root"])
+    wt_path = Path(wt["path"])
+    branch = wt.get("branch")
+    force = bool(args.get("force", False))
+    delete_branch = bool(args.get("delete_branch", False))
+
+    messages: List[str] = []
+    if wt_path.exists():
+        git_args = ["worktree", "remove"]
+        if force:
+            git_args.append("--force")
+        git_args.append(str(wt_path))
+        rc, out, err = run_git(git_args, repo_root, timeout=60)
+        if rc != 0:
+            return {
+                "task_id": task_id,
+                "cleaned": False,
+                "error": f"git worktree remove failed: {err or out}",
+            }, True
+        messages.append(f"Removed worktree {wt_path}")
+    else:
+        run_git(["worktree", "prune"], repo_root)
+        messages.append("Worktree directory already absent; pruned stale git worktree metadata.")
+
+    branch_deleted = False
+    if delete_branch and branch:
+        flag = "-D" if force else "-d"
+        rc, out, err = run_git(["branch", flag, branch], repo_root)
+        if rc == 0:
+            branch_deleted = True
+            messages.append(f"Deleted branch {branch}")
+        else:
+            messages.append(f"Branch {branch} not deleted: {err or out}")
+
+    wt["cleaned_at"] = utc_now_iso()
+    meta["worktree"] = wt
+    meta["updated_at"] = utc_now_iso()
+    atomic_write_json(meta_path, meta)
+
+    return {
+        "task_id": task_id,
+        "cleaned": True,
+        "branch_deleted": branch_deleted,
+        "messages": messages,
+    }, False
+
+
+TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+    {
+        "name": "codex_dispatch",
+        "description": (
+            "Dispatch a detailed implementation specification to local Codex CLI running "
+            "non-interactively with full permissions (--dangerously-bypass-approvals-and-sandbox). "
+            "Configured as an async background tool: after calling it, do NOT poll codex_status; "
+            "either work on something else or stop your turn and wait for automatic wakeup."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workdir": {
+                    "type": "string",
+                    "description": "Absolute path to the target project/working directory.",
+                },
+                "spec": {
+                    "type": "string",
+                    "description": "Complete, self-contained Markdown task specification for Codex. Provide either spec or spec_file.",
+                },
+                "spec_file": {
+                    "type": "string",
+                    "description": "Absolute path to an existing Markdown specification file. Provide either spec or spec_file.",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional short unique slug (e.g. 'feat-auth-jwt'). Auto-generated if omitted.",
+                },
+                "use_worktree": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "If true, run Codex in an isolated managed Git worktree (branch codex/<task_id>). REQUIRED when running multiple Codex tasks in parallel on the same repository.",
+                },
+                "base_ref": {
+                    "type": "string",
+                    "default": "HEAD",
+                    "description": "Git ref to branch from when use_worktree=true (default: HEAD).",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional Codex model override (omit to use default in ~/.codex/config.toml).",
+                },
+                "reasoning_effort": {
+                    "type": "string",
+                    "description": "Optional Codex reasoning effort override (e.g. 'medium', 'high', 'xhigh').",
+                },
+                "extra_writable_dirs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional extra directories passed via --add-dir.",
+                },
+            },
+            "required": ["workdir"],
+        },
+    },
+    {
+        "name": "codex_resume",
+        "description": (
+            "Resume an existing Codex task/session with concrete review feedback or rework instructions "
+            "while preserving Codex's prior session memory and full permissions. Runs asynchronously as a "
+            "background tool; do NOT poll after calling."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID returned by an earlier codex_dispatch call (automatically resolves session_id and workdir).",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Explicit Codex session UUID (only needed if task_id is omitted).",
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": "Working directory (only needed if task_id is omitted).",
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "Concrete review feedback, failing test output, and exact fixes required. Provide either feedback or feedback_file.",
+                },
+                "feedback_file": {
+                    "type": "string",
+                    "description": "Path to a Markdown feedback file. Provide either feedback or feedback_file.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional Codex model override.",
+                },
+                "reasoning_effort": {
+                    "type": "string",
+                    "description": "Optional Codex reasoning effort override.",
+                },
+            },
+        },
+    },
+    {
+        "name": "codex_status",
+        "description": (
+            "Non-blocking inspection of one Codex task (or list of recent tasks). "
+            "Use ONLY when the user explicitly asks for progress or for post-mortem debugging—never poll in a loop."
+        ),
+        "_meta": {"ui": {"visibility": ["model", "app"]}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Specific task_id to inspect. Omit to list recent tasks.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Maximum number of recent tasks to return when task_id is omitted.",
+                },
+            },
+        },
+    },
+    {
+        "name": "codex_cancel",
+        "description": "Terminate a currently running Codex task immediately.",
+        "_meta": {"ui": {"visibility": ["model", "app"]}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The running task_id to terminate.",
+                }
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "codex_cleanup_worktree",
+        "description": (
+            "Remove a managed Git worktree created with use_worktree=true after Gemini has verified "
+            "and merged (or discarded) its branch."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task_id whose managed worktree should be removed.",
+                },
+                "delete_branch": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Also delete the codex/<task_id> branch.",
+                },
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Force removal even with uncommitted changes or unmerged branch.",
+                },
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "codex_monitor",
+        "title": "Codex Monitor",
+        "description": (
+            "Open the live Codex Castor monitor panel (side pane or full page in Antigravity App) "
+            "or return a structured live snapshot of running and recent Codex tasks including "
+            "effective model, reasoning effort, and current activity."
+        ),
+        "_meta": {
+            "ui": {"resourceUri": MONITOR_URI, "visibility": ["model", "app"]},
+            "com.google.antigravity/ui": {
+                "entrypoints": [
+                    {"type": "aux_pane", "title": "Codex Monitor"},
+                    {"type": "global", "title": "Codex Monitor"},
+                ],
+            },
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 0, "default": 20},
+            },
+        },
+    },
+]
+
+
+def dispatch_tool_call(req_id: Any, params: Dict[str, Any], progress_token: Any = None) -> None:
+    tool_name = params.get("name")
+    arguments = params.get("arguments") or {}
+    if not isinstance(arguments, dict):
+        send_error(req_id, -32602, "Tool arguments must be a JSON object")
+        return
+
+    try:
+        structured = None
+        content_text = None
+        if tool_name == "codex_dispatch":
+            payload, is_err = handle_codex_dispatch(req_id, arguments, progress_token)
+        elif tool_name == "codex_resume":
+            payload, is_err = handle_codex_resume(req_id, arguments, progress_token)
+        elif tool_name == "codex_status":
+            payload, is_err = handle_codex_status(arguments)
+            if not is_err:
+                structured = payload
+        elif tool_name == "codex_cancel":
+            payload, is_err = handle_codex_cancel(arguments)
+        elif tool_name == "codex_cleanup_worktree":
+            payload, is_err = handle_codex_cleanup_worktree(arguments)
+        elif tool_name == "codex_monitor":
+            payload, content_text = handle_codex_monitor(arguments)
+            structured, is_err = payload, False
+        else:
+            send_error(req_id, -32602, f"Unknown tool: {tool_name}")
+            return
+
+        if content_text is None:
+            content_text = json.dumps(payload, ensure_ascii=False, indent=2)
+        result = {"content": [{"type": "text", "text": content_text}], "isError": is_err}
+        if structured is not None:
+            result["structuredContent"] = structured
+        send_result(req_id, result)
+    except Exception as exc:
+        log_err(f"Tool '{tool_name}' failed: {exc}")
+        send_result(
+            req_id,
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2),
+                    }
+                ],
+                "isError": True,
+            },
+        )
+
+
+def read_monitor_html() -> str:
+    try:
+        html = MONITOR_HTML_PATH.read_text(encoding="utf-8")
+        if html.strip():
+            return html
+    except (OSError, UnicodeError):
+        pass
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Codex Monitor</title>'
+        '</head><body><p>Install the Codex Castor monitor HTML to open the live panel.</p></body></html>'
+    )
+
+
+def handle_message(msg: Dict[str, Any]) -> None:
+    global CLIENT_LOG_LEVEL
+    method = msg.get("method")
+    req_id = msg.get("id")
+    is_notification = "id" not in msg or req_id is None
+    params = msg.get("params", {})
+    if not isinstance(params, dict):
+        if not is_notification:
+            send_error(req_id, -32602, "Request params must be a JSON object")
+        return
+
+    if method == "initialize":
+        if is_notification:
+            return
+        requested_protocol = params.get("protocolVersion")
+        proto = requested_protocol if requested_protocol in SUPPORTED_PROTOCOL_VERSIONS else DEFAULT_PROTOCOL_VERSION
+        capabilities = {"tools": {"listChanged": False}, "resources": {"listChanged": False}, "logging": {}}
+        client_capabilities = params.get("capabilities")
+        extensions = client_capabilities.get("extensions") if isinstance(client_capabilities, dict) else None
+        app_capability = extensions.get(MCP_APPS_EXTENSION) if isinstance(extensions, dict) else None
+        mime_types = app_capability.get("mimeTypes") if isinstance(app_capability, dict) else None
+        if isinstance(mime_types, list) and MONITOR_MIME in mime_types:
+            capabilities["extensions"] = {MCP_APPS_EXTENSION: {}}
+        send_result(
+            req_id,
+            {
+                "protocolVersion": proto,
+                "capabilities": capabilities,
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+                "instructions": (
+                    "Async MCP server for local Codex CLI (full permissions). "
+                    "codex_dispatch and codex_resume run as Antigravity background tasks: "
+                    "yield or handle other work until reactive wakeup. Call codex_status or "
+                    "codex_monitor on user request."
+                ),
+            },
+        )
+        return
+
+    if method == "notifications/initialized":
+        return
+
+    if method == "notifications/cancelled":
+        cancel_id = params.get("requestId")
+        with ACTIVE_LOCK:
+            entry = ACTIVE_BY_REQ_ID.get(cancel_id)
+        if entry is not None:
+            log_err(f"Cancellation received for requestId={cancel_id} (task={entry['task_id']})")
+            entry["cancel_flag"].set()
+            terminate_process_group(entry["proc"])
+        return
+
+    if method == "ping":
+        if not is_notification:
+            send_result(req_id, {})
+        return
+
+    if method == "tools/list":
+        if not is_notification:
+            send_result(req_id, {"tools": TOOL_DEFINITIONS})
+        return
+
+    if method == "logging/setLevel":
+        if not is_notification:
+            level = params.get("level")
+            if level not in LOG_LEVELS:
+                send_error(req_id, -32602, "Invalid logging level")
+            else:
+                with LOG_LEVEL_LOCK:
+                    CLIENT_LOG_LEVEL = level
+                send_result(req_id, {})
+        return
+
+    if method == "resources/list":
+        if not is_notification:
+            send_result(req_id, {"resources": [{
+                "uri": MONITOR_URI,
+                "name": "codex_castor_monitor",
+                "title": "Codex Castor Monitor",
+                "description": "Live monitor showing Codex model, reasoning effort, elapsed time, and real-time activity.",
+                "mimeType": MONITOR_MIME,
+            }]})
+        return
+
+    if method == "resources/read":
+        if not is_notification:
+            if params.get("uri") != MONITOR_URI:
+                send_error(req_id, -32002, "Resource not found")
+            else:
+                send_result(req_id, {"contents": [{
+                    "uri": MONITOR_URI,
+                    "mimeType": MONITOR_MIME,
+                    "text": read_monitor_html(),
+                    "_meta": {"ui": {"prefersBorder": False}},
+                }]})
+        return
+
+    if method == "tools/call":
+        if is_notification:
+            return
+        metadata = params.get("_meta")
+        progress_token = metadata.get("progressToken") if isinstance(metadata, dict) else None
+        if progress_token is not None and type(progress_token) not in (str, int):
+            send_error(req_id, -32602, "progressToken must be a string or integer")
+            return
+        t = threading.Thread(
+            target=dispatch_tool_call,
+            args=(req_id, params, progress_token),
+            daemon=True,
+        )
+        t.start()
+        return
+
+    if not is_notification:
+        send_error(req_id, -32601, f"Method not found: {method}")
+
+
+def cleanup_all_active() -> None:
+    with ACTIVE_LOCK:
+        entries = list(ACTIVE_BY_REQ_ID.values())
+    for entry in entries:
+        entry["cancel_flag"].set()
+        terminate_process_group(entry["proc"])
+
+
+def main() -> int:
+    TASKS_ROOT.mkdir(parents=True, exist_ok=True)
+    WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
+
+    def _on_signal(signum: int, _frame: Any) -> None:
+        log_err(f"Received signal {signum}, shutting down active Codex workers.")
+        cleanup_all_active()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    try:
+        for raw_line in sys.stdin:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError as exc:
+                send_error(None, -32700, f"Parse error: {exc}")
+                continue
+            if isinstance(msg, dict):
+                handle_message(msg)
+    finally:
+        cleanup_all_active()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="An illustrated engineering manuscript for Codex Castor, the zero-dependency async MCP server connecting Gemini in Antigravity and local Codex CLI.">
+  <title>Codex Castor — The Engineering Manuscript</title>
+  <link rel="canonical" href="https://jay201368.github.io/codex-castor/">
+  <link rel="alternate" hreflang="zh-CN" href="https://jay201368.github.io/codex-castor/index.zh-CN.html">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&amp;family=Cormorant+Garamond:ital,wght@0,600;0,700;1,600&amp;family=IBM+Plex+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,400;6..72,600&amp;display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <svg class="definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="0" height="0">
+    <defs>
+      <filter id="ink-roughen" x="-10%" y="-10%" width="120%" height="120%">
+        <feTurbulence type="fractalNoise" baseFrequency=".038 .13" numOctaves="3" seed="17" result="fiber"/>
+        <feDisplacementMap in="SourceGraphic" in2="fiber" scale="1.2" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+      <pattern id="ink-hatch" width="7" height="7" patternUnits="userSpaceOnUse">
+        <path d="M-2 2L2-2M-1 8L8-1M5 9L9 5M0 0L7 7" stroke="#7c634a" stroke-width=".55" opacity=".48"/>
+      </pattern>
+      <marker id="arrow-ink" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="8.6" refY="5" orient="auto-start-reverse">
+        <path d="M1 1Q4 3 9 5Q4 6.5 1 9" fill="none" stroke="#4b3626" stroke-linecap="round" stroke-width="1.2"/>
+      </marker>
+      <marker id="arrow-red" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="8.6" refY="5" orient="auto-start-reverse">
+        <path d="M1 1Q5 4 9 5Q4 7 1 9" fill="none" stroke="#8f2d22" stroke-linecap="round" stroke-width="1.2"/>
+      </marker>
+      <marker id="arrow-blue" viewBox="0 0 10 10" markerWidth="8" markerHeight="8" refX="8.6" refY="5" orient="auto-start-reverse">
+        <path d="M1 1Q4 3 9 5Q4 6.5 1 9" fill="none" stroke="#274c5b" stroke-linecap="round" stroke-width="1.2"/>
+      </marker>
+      <symbol id="emblem" viewBox="0 0 64 64">
+        <g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M24 8C11 12 5 23 7 35c1 4 2 7 4 10m2-28 3 2m-8 5 4 1"/>
+          <path d="M46 42C38 53 25 57 13 48m35-5c-6 12-19 18-31 12"/>
+          <path fill="currentColor" d="M17 48c5-4 7-10 8-17 1-6 4-11 9-14l1-7 5 7 3-2 1 6c2 3 5 7 9 11 2 2 1 5-1 6l-4 1c-4 0-8-3-11-5-3 5-3 10 0 14-6 4-14 5-20 0Z"/>
+          <path stroke="var(--vellum)" d="M30 24c-3 5-2 13-8 21m16-24c0 6 2 11 7 15m-6-8 7-3"/>
+          <circle cx="46.8" cy="40.5" r="3.5" fill="var(--vellum)"/>
+        </g>
+        <circle cx="43.5" cy="29.8" r="1.25" fill="var(--vellum)"/>
+        <circle cx="56" cy="21" r="1.6" fill="currentColor"/>
+        <path fill="var(--rubric)" d="M47 7.5l1.6 3.9L53 13l-4.4 1.6-1.6 3.9-1.6-3.9L41 13l4.4-1.6Z"/>
+      </symbol>
+      <symbol id="compass-icon" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7 39q18-5 34 0M7 43q18-4 34 0M24 9 11 38m13-29 14 29M15 30q8 4 17 0m-11-17 9 4M18 12l-2 9m14-8 4 8M24 5v3"/>
+          <circle cx="24" cy="12" r="4"/>
+          <path d="M13 23a13 13 0 0 1 23 2" opacity=".54"/>
+        </g>
+      </symbol>
+      <symbol id="hour-icon" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 6q12-2 24 0M11 42q15 2 25 0M14 7c0 12 8 13 9 17-1 5-10 7-10 17m21-33c0 10-8 13-9 16 1 5 10 6 10 17M16 14q8 2 16 0M16 38q8-10 16 0M24 26v3m0 3v1"/>
+          <path d="M6 17l3 3m30 10 3 2M39 12l3-2M7 33l3-2" opacity=".55"/>
+        </g>
+      </symbol>
+      <symbol id="branch-icon" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round">
+          <path d="M24 11v26m-2-20Q9 18 9 34m17-17q12 2 12 17"/>
+          <circle cx="24" cy="7" r="4"/><circle cx="9" cy="38" r="4"/>
+          <circle cx="24" cy="41" r="4"/><circle cx="38" cy="38" r="4"/>
+        </g>
+      </symbol>
+      <symbol id="report-icon" viewBox="0 0 48 48">
+        <g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 7q10-2 17-1l7 9-1 27q-11-1-23 0zm17 0 1 9 6-1M17 21l12-1m-12 5 13-1m-13 5 13-1m-13 5 8-1"/>
+          <path d="M9 10 8 44q11 1 25 0" opacity=".6"/>
+        </g>
+      </symbol>
+      <symbol id="anvil-icon" viewBox="0 0 62 46">
+        <g fill="none" stroke="currentColor" stroke-width="1.55" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M3 17q22 1 35 0l4 5 16-2q-5 10-20 11l-6 4 2 5h9v4H14v-4h9l2-6q-7-4-10-10Q7 23 3 17zm13 7 23-1m-15 14 9 1m0-28 12-8 6 6-11 8m6-13 6 5m-11 0-9 13"/>
+          <path d="M14 28l-5 5m6-2-2 7m35-25 5 2" opacity=".58"/>
+        </g>
+      </symbol>
+      <radialGradient id="wax-fill" cx="31%" cy="27%" r="76%">
+        <stop stop-color="#c75842"/><stop offset=".58" stop-color="#a33429"/><stop offset="1" stop-color="#74231b"/>
+      </radialGradient>
+      <path id="wax-legend" d="M28.1 66.5a33 33 0 1 1 63.8 0"/>
+    </defs>
+  </svg>
+
+  <a class="skip" href="#main">Skip to the manuscript</a>
+  <div class="codex" id="top">
+    <div class="folio-rules" aria-hidden="true"><i class="nw"></i><i class="ne"></i><i class="sw"></i><i class="se"></i></div>
+    <header class="masthead">
+      <a class="brand" href="#top">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><use href="#emblem"/></svg>
+        <span><strong>CODEX CASTOR</strong><small>MS. MMXXVI · ZERO-DEP MCP</small></span>
+      </a>
+      <nav class="folio-nav" aria-label="Manuscript folios">
+        <a href="#architecture">Architecture</a>
+        <a href="#async-cycle">Async Cycle</a>
+        <a href="#instruments">Six Instruments</a>
+        <a href="#worktrees">Worktrees &amp; Toolkit</a>
+        <a href="#install">Install</a>
+      </nav>
+      <div class="mast-actions">
+        <a class="lang-stamp" href="index.zh-CN.html" lang="zh-CN" hreflang="zh-CN">简体中文</a>
+        <a class="github" href="https://github.com/JAY201368/codex-castor">GitHub ↗</a>
+      </div>
+    </header>
+
+    <main id="main" tabindex="-1">
+      <section class="hero" aria-labelledby="hero-heading">
+        <div>
+          <p class="rubric"><span aria-hidden="true">❧</span>Folio I · Asynchronous Orchestration</p>
+          <h1 id="hero-heading"><span class="name-line">The Architect</span><br>drafts. <em><span class="name-line">The Artisan</span><br>builds.</em></h1>
+          <svg class="pen-rule" viewBox="0 0 276 13" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M1 6C48 3 60 8 110 5S215 4 274 6M8 10Q94 8 172 9T252 8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" filter="url(#ink-roughen)"/>
+          </svg>
+          <p class="thesis">Gemini (Antigravity) writes the brief. Local Codex CLI builds in isolated Git worktrees. A zero-dependency MCP stdio server returns the work for review without a single poll.</p>
+          <div class="hero-actions">
+            <a class="ink-button" href="#architecture">Inspect the Architecture <span aria-hidden="true">↓</span></a>
+            <a class="ink-button light" href="#install">Install Codex Castor <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="idle-stamp">
+            <svg viewBox="0 0 260 34" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M3 4Q117 1 257 4L258 30Q153 33 3 31ZM7 7Q128 4 253 7L254 27Q147 30 7 28Z" fill="none" stroke="currentColor" stroke-width="1" filter="url(#ink-roughen)"/>
+            </svg>
+            <span>0 TOKEN IDLE · REACTIVE WAKEUP</span>
+          </p>
+        </div>
+        <figure class="hero-plate">
+          <i class="nw" aria-hidden="true"></i><i class="ne" aria-hidden="true"></i>
+          <i class="sw" aria-hidden="true"></i><i class="se" aria-hidden="true"></i>
+          <div class="image-field"><img src="assets/manuscript-castor.jpg" width="1536" height="1024" alt="Codex Castor manuscript illustration of an architect’s lectern with an armillary sphere and mechanical reins guiding two clockwork steeds beside parallel workshops" fetchpriority="high"></div>
+          <figcaption>Fig. I — Command lectern &amp; reins for two clockwork steeds</figcaption>
+        </figure>
+      </section>
+      <div class="pillars">
+        <div class="pillar"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#compass-icon"/></svg><strong>Zero Dependencies</strong><small>Python 3.9+ stdlib</small></div>
+        <div class="pillar"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#hour-icon"/></svg><strong>Zero Polling</strong><small><code>background: always</code></small></div>
+        <div class="pillar"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#branch-icon"/></svg><strong>Parallel Isolation</strong><small>Managed Git worktrees</small></div>
+        <div class="pillar"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#report-icon"/></svg><strong>Strict Contract</strong><small><code>report.schema.json</code></small></div>
+      </div>
+
+      <section class="folio" id="architecture" aria-labelledby="architecture-heading">
+        <header class="folio-heading">
+          <p class="rubric"><span aria-hidden="true">§</span>Folio II · Tabula I</p>
+          <h2 id="architecture-heading">The dual-mind architecture</h2>
+          <p>The patron and architect agree on the work. Castor carries the brief into the local workshop and returns a compact result for independent review.</p>
+        </header>
+        <figure class="plate-frame">
+          <svg class="schematic architecture-drawing" viewBox="0 0 660 524" role="img" aria-labelledby="arch-svg-title arch-svg-desc">
+            <title id="arch-svg-title">The architect, MCP server, and parallel Codex workshops</title>
+            <desc id="arch-svg-desc">The patron briefs Gemini in Antigravity. Gemini sends the spec to the MCP server. Each tool call gets a worker thread. Codex CLI artisans run in separate worktrees. The server saves the event stream and returns a report and Git summary. Antigravity wakes Gemini, which can resume a session with review feedback.</desc>
+            <g class="guide" aria-hidden="true">
+              <path d="M330 6v487M20 252h620M18 89h625M18 359h625M60 20v458m541-458v458" stroke-dasharray="3 5"/>
+              <path d="M190 261a140 140 0 0 1 280 0m-261 0a121 121 0 0 1 242 0M146 279q184 125 368 0M330 140l-141 120m141-120 141 120"/>
+              <path d="M8 14h25M20 3v24m607-13h25M640 3v24M8 485h25m-13-12v24m607-12h25m-12-12v24"/>
+              <circle cx="330" cy="252" r="4"/>
+            </g>
+            <g filter="url(#ink-roughen)">
+              <path class="pen paper-fill" d="M253 12Q322 8 406 12l-2 38q-64 2-152 0z"/>
+              <path class="pen fine" d="M259 17q63-1 141 0l-1 28-141 1z"/>
+              <path class="pen" marker-end="url(#arrow-ink)" d="M329 51q-2 8 0 19"/>
+              <path class="pen paper-fill" d="M125 74Q339 70 535 75l-1 77q-197 3-409-1z"/>
+              <path class="pen fine" d="M132 80q194-4 397 0l-2 65q-192 2-395 0z"/>
+              <path class="hatching" d="M131 81h62v63h-62zm334 0h63v63h-63z"/>
+              <path class="pen" marker-end="url(#arrow-ink)" d="M329 153q-4 14 0 33"/>
+              <path class="red dash" opacity=".64" d="M234 455q-80 24-153 18Q14 468 14 405V254q0-36 60-31l53 1"/>
+              <path class="red dash" marker-end="url(#arrow-red)" d="M127 224Q39 228 35 169q-4-51 88-51"/>
+              <path class="blue dash" marker-end="url(#arrow-blue)" d="M544 112q87 0 86 65-1 55-86 58"/>
+              <path class="pen paper-fill" d="M126 190q208-3 409-1l1 93q-203 2-410 0z"/>
+              <path class="pen fine" d="M133 196q190-3 396 0v79q-175 3-396 0z"/>
+              <path class="hatching" d="M134 197h50v78h-50zm341 0h53v78h-53z"/>
+              <path class="blue" marker-end="url(#arrow-blue)" d="M314 283q-6 24-47 27t-85 31"/>
+              <path class="blue" marker-end="url(#arrow-blue)" d="M346 283q6 24 47 27t85 31"/>
+              <path class="blue paper-fill" d="M28 346q137-4 286 0l-1 92q-142 4-285 1zM346 346q140-4 286 0l-1 93q-129 3-285-1z"/>
+              <path class="blue fine" d="M34 352q134-2 274 0l-1 79q-140 4-273 0zM352 352q144-2 274 0l-1 79q-127 4-273 0z"/>
+              <path class="hatching" d="M35 352h53v79H35zm318 0h53v79h-53z"/>
+              <path class="blue dash" marker-end="url(#arrow-blue)" d="M169 439q2 14 74 16m247-16q-2 14-72 16"/>
+            </g>
+            <g aria-hidden="true" style="color: var(--sepia)">
+              <use href="#compass-icon" x="140" y="90" width="44" height="44"/>
+              <use href="#report-icon" x="474" y="91" width="41" height="41"/>
+              <use href="#emblem" x="137" y="210" width="42" height="42"/>
+              <use href="#branch-icon" x="480" y="213" width="40" height="40"/>
+            </g>
+            <g aria-hidden="true" style="color: var(--blue)">
+              <use href="#anvil-icon" x="39" y="374" width="44" height="36"/>
+              <use href="#anvil-icon" x="357" y="374" width="44" height="36"/>
+            </g>
+            <g text-anchor="middle">
+              <text class="label" x="330" y="40">Patron · User</text>
+              <text class="label" x="330" y="109">Gemini / Antigravity</text>
+              <text class="annotation" x="330" y="136">Architect · read repo, review diff</text>
+              <text class="annotation" x="399" y="178">spec.md</text>
+              <text class="annotation red-text" x="76" y="161">Reactive<tspan x="76" dy="23">wakeup</tspan></text>
+              <text class="annotation blue-text" x="591" y="198">codex_resume</text>
+              <text class="label" x="330" y="223">Codex Castor MCP Server</text>
+              <text class="type" x="330" y="244">mcp/server.py · JSON-RPC 2.0</text>
+              <text class="type" x="330" y="264">stdio · timeoutSeconds: -1</text>
+              <text class="annotation blue-text" x="330" y="326">One thread per tool call</text>
+              <text class="label blue-text" x="195" y="376">Codex CLI · Artisan A</text>
+              <text class="type blue-text" x="195" y="399">codex/task-a</text>
+              <text class="annotation blue-text" x="195" y="423">Isolated Git worktree</text>
+              <text class="label blue-text" x="513" y="376">Codex CLI · Artisan B</text>
+              <text class="type blue-text" x="513" y="399">codex/task-b</text>
+              <text class="annotation blue-text" x="513" y="423">Isolated Git worktree</text>
+              <text class="annotation red-text" x="330" y="476">Event ledger · report · Git summary</text>
+              <text class="type" x="330" y="501">events-r1.jsonl · report-r1.json · git diff --stat</text>
+            </g>
+          </svg>
+          <figcaption>The server runs <code>codex exec</code> or <code>codex exec resume</code> with <code>--json</code>, <code>--output-schema report.schema.json</code>, and <code>--dangerously-bypass-approvals-and-sandbox</code>. Events stream to disk. The tool returns the report, Git summary, and artifact paths, triggering Antigravity’s wakeup.</figcaption>
+        </figure>
+        <div class="duties">
+          <article><h3>The Architect · Gemini</h3><p>Read the repository, clarify the design, write <code>spec.md</code>, review the real <code>git diff</code>, and run the acceptance checks independently.</p></article>
+          <article><h3>The Artisan · local Codex CLI</h3><p>Implement the brief, verify the change in the assigned checkout, and deliver the six-field JSON report. Resume the same session when review calls for rework.</p></article>
+        </div>
+      </section>
+
+      <section class="folio" id="async-cycle" aria-labelledby="cycle-heading">
+        <header class="folio-heading">
+          <p class="rubric"><span aria-hidden="true">✦</span>Folio III · Tabula II</p>
+          <h2 id="cycle-heading">The zero-polling cycle</h2>
+          <p>Antigravity runs dispatch and resume in the background. End the turn after dispatch, or work on something unrelated until the result arrives.</p>
+        </header>
+        <div class="cycle-layout">
+          <figure class="plate-frame">
+            <svg class="schematic cycle-drawing" viewBox="0 0 360 465" role="img" aria-labelledby="cycle-svg-title cycle-svg-desc">
+              <title id="cycle-svg-title">The five stages of a background task</title>
+              <desc id="cycle-svg-desc">Draft a spec, dispatch, yield at zero idle tokens, wake on completion, and review independently. Accept and clean up or send feedback to resume the same session.</desc>
+              <path class="guide" d="M65 90v342m121-347v350M43 111h291M43 401h291M10 7h17m-9-6v14m315-8h17m-8-6v14"/>
+              <g transform="rotate(-2 179 44)">
+                <text class="annotation red-text" x="180" y="27" text-anchor="middle">The old folly</text>
+                <text class="annotation red-text" x="180" y="50" text-anchor="middle">Polling every 15s burns context &amp; tokens</text>
+                <path class="red" filter="url(#ink-roughen)" d="M20 42Q127 34 338 35M23 53Q173 46 339 22"/>
+              </g>
+              <g filter="url(#ink-roughen)">
+                <path class="pen" marker-end="url(#arrow-ink)" d="M65 134q1 13 0 23"/>
+                <path class="pen" marker-end="url(#arrow-ink)" d="M65 199q-1 15 0 23"/>
+                <path class="red" marker-end="url(#arrow-red)" d="M65 264q-1 14 0 23"/>
+                <path class="red" marker-end="url(#arrow-red)" d="M65 329q-1 14 0 23"/>
+                <path class="blue dash" marker-end="url(#arrow-blue)" d="M300 380q46 0 46-75V225q0-43-45-45"/>
+                <path class="pen paper-fill" d="M41 91q114-3 258 0l-1 42q-123 2-257 0zm0 65q131-2 258 0l-1 42q-115 2-257 0zm0 65q138-3 258 0l-1 42q-143 3-257 0zm0 65q114-2 258 0l-1 42q-144 3-257 0zm0 65q143-2 258 0l-1 42q-142 3-257 0z"/>
+                <path class="hatching" d="M42 92h44v40H42zm0 65h44v40H42zm0 65h44v40H42zm0 65h44v40H42zm0 65h44v40H42z"/>
+                <path class="red fine" d="M89 94v36m0 29v36m0 29v36m0 30v34m0 30v35"/>
+                <path class="blue" marker-end="url(#arrow-blue)" d="M64 395q0 24 40 35"/>
+              </g>
+              <g class="annotation red-text" text-anchor="middle">
+                <text x="64" y="119">I</text><text x="64" y="184">II</text><text x="64" y="249">III</text>
+                <text x="64" y="314">IV</text><text x="64" y="379">V</text>
+              </g>
+              <g class="label">
+                <text x="101" y="121">Draft the spec</text>
+                <text x="101" y="186">Dispatch in background</text>
+                <text x="101" y="251">Yield at zero tokens</text>
+                <text x="101" y="316">Wake on completion</text>
+                <text x="101" y="381">Review independently</text>
+              </g>
+              <text class="annotation blue-text" x="335" y="264" text-anchor="middle" transform="rotate(-90 335 264)">Rework · codex_resume</text>
+              <text class="annotation blue-text" x="112" y="434">Accept · merge · clean up</text>
+            </svg>
+            <figcaption class="hand-note">Zero polling. Let completion ring the bell.</figcaption>
+          </figure>
+          <ol class="cycle-steps">
+            <li><h3>Draft the spec</h3><p>Gemini reads the repository and writes a six-part Markdown brief covering objective, context, detailed requirements, constraints, verification, and acceptance.</p></li>
+            <li><h3>Dispatch in background</h3><p>Call <code>codex_dispatch</code> with <code>background: "always"</code>. Set <code>use_worktree: true</code> to create a managed checkout, and share the task ID and branch.</p></li>
+            <li><h3>Yield at zero tokens</h3><p>Gemini yields while Codex works autonomously. Skip polling loops, polling timers, and sleeps.</p></li>
+            <li><h3>Wake on completion</h3><p>Antigravity wakes Gemini on tool return with the JSON report and <code>git.diff_stat</code>.</p></li>
+            <li><h3>Review independently</h3><p>Inspect the diff and run the checks. Merge accepted changes before <code>codex_cleanup_worktree</code>, or send specific feedback through <code>codex_resume</code> to preserve session memory.</p></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="folio" id="instruments" aria-labelledby="instruments-heading">
+        <header class="folio-heading">
+          <p class="rubric"><span aria-hidden="true">§</span>Folio IV · Tabula III</p>
+          <h2 id="instruments-heading">Six MCP instruments</h2>
+          <p>All six tools load eagerly (<code>eager: true</code>), with async background mode configured in Antigravity. Select a tool to inspect its parameters, call payload, and returned result.</p>
+        </header>
+        <div data-instrument-ledger>
+          <div class="tab-index" data-instrument-index aria-label="Choose an MCP instrument">
+            <a id="tab-dispatch" href="#tool-dispatch"><code>codex_dispatch</code><span class="mode always">background: always</span></a>
+            <a id="tab-resume" href="#tool-resume"><code>codex_resume</code><span class="mode always">background: always</span></a>
+            <a id="tab-status" href="#tool-status"><code>codex_status</code><span class="mode off">background: off</span></a>
+            <a id="tab-cancel" href="#tool-cancel"><code>codex_cancel</code><span class="mode off">background: off</span></a>
+            <a id="tab-cleanup_worktree" href="#tool-cleanup_worktree"><code>codex_cleanup_worktree</code><span class="mode off">background: off</span></a>
+            <a id="tab-monitor" href="#tool-monitor"><code>codex_monitor</code><span class="mode off">background: off</span></a>
+          </div>
+          <article class="ledger-panel" id="tool-dispatch">
+            <header class="instrument-title"><h3>codex_dispatch</h3><span class="mode always">background: always</span></header>
+            <p>Start a new implementation from a self-contained Markdown spec. By default Codex edits the active checkout.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>workdir</code></th><td>Required absolute path to the target directory.</td></tr>
+                  <tr><th scope="row"><code>spec / spec_file</code></th><td>Provide Markdown text or the absolute path to a spec file.</td></tr>
+                  <tr><th scope="row"><code>task_id</code></th><td>Optional unique ID. The server generates one when omitted.</td></tr>
+                  <tr><th scope="row"><code>use_worktree / base_ref</code></th><td>Create a managed worktree and select its base. Defaults: false and HEAD.</td></tr>
+                  <tr><th scope="row"><code>model / reasoning_effort</code></th><td>Optional Codex model and reasoning overrides.</td></tr>
+                  <tr><th scope="row"><code>extra_writable_dirs</code></th><td>Optional paths passed through via --add-dir.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-1">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-1" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "name": "codex_dispatch",
+  "arguments": {
+    "workdir": "/home/dev/project",
+    "spec_file": "/home/dev/specs/task-a.md",
+    "task_id": "task-a",
+    "use_worktree": true
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-2">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-2" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "task_id": "task-a",
+  "round": 1,
+  "status": "completed",
+  "report": {
+    "status": "completed",
+    "summary": "Documented the CLI.",
+    "files_changed": [
+      "README.md"
+    ],
+    "commands_run": [
+      "git diff --check (passed)"
+    ],
+    "tests_summary": "Diff whitespace check passed.",
+    "open_issues": []
+  },
+  "git": {
+    "branch": "codex/task-a",
+    "diff_stat": "README.md | 2 ++"
+  }
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Set use_worktree: true whenever two or more artisans edit the same repository.</p>
+          </article>
+          <article class="ledger-panel" id="tool-resume">
+            <header class="instrument-title"><h3>codex_resume</h3><span class="mode always">background: always</span></header>
+            <p>Continue a previous Codex session with concrete review feedback in its work directory.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>Reuse the session and working directory from an earlier task.</td></tr>
+                  <tr><th scope="row"><code>session_id / workdir</code></th><td>Supply both when resuming without a task ID.</td></tr>
+                  <tr><th scope="row"><code>feedback / feedback_file</code></th><td>Provide actionable feedback or the path to a Markdown feedback file.</td></tr>
+                  <tr><th scope="row"><code>model / reasoning_effort</code></th><td>Optional Codex model and reasoning overrides.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-3">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-3" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "name": "codex_resume",
+  "arguments": {
+    "task_id": "task-a",
+    "feedback": "README.md: document the config path."
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-4">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-4" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "task_id": "task-a",
+  "round": 2,
+  "status": "completed",
+  "git": {
+    "branch": "codex/task-a",
+    "diff_stat": "README.md | 3 +++"
+  }
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Cite the file and line, include failing output, and say what should happen.</p>
+          </article>
+          <article class="ledger-panel" id="tool-status">
+            <header class="instrument-title"><h3>codex_status</h3><span class="mode off">background: off</span></header>
+            <p>Inspect a single task or list recent tasks. Use on explicit request or during post-mortem debugging.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>Inspect one task, including recent events and stderr tail.</td></tr>
+                  <tr><th scope="row"><code>limit</code></th><td>Limit the recent task list when task_id is omitted. Default: 20.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-5">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-5" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "name": "codex_status",
+  "arguments": {
+    "task_id": "task-a"
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-6">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-6" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "task_id": "task-a",
+  "status": "running",
+  "alive": true,
+  "round": 1,
+  "last_event": "turn.started"
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Take one snapshot. The completion result arrives on its own.</p>
+          </article>
+          <article class="ledger-panel" id="tool-cancel">
+            <header class="instrument-title"><h3>codex_cancel</h3><span class="mode off">background: off</span></header>
+            <p>Stop a running Codex process group. The server sends SIGTERM and escalates to SIGKILL if needed.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>Required ID of the running task.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-7">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-7" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "name": "codex_cancel",
+  "arguments": {
+    "task_id": "task-b"
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-8">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-8" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "task_id": "task-b",
+  "cancelled": true,
+  "message": "Terminated running Codex process."
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>The process stops. Any changes it made stay in the checkout.</p>
+          </article>
+          <article class="ledger-panel" id="tool-cleanup_worktree">
+            <header class="instrument-title"><h3>codex_cleanup_worktree</h3><span class="mode off">background: off</span></header>
+            <p>Remove a managed worktree after reviewing and merging its changes or deciding to discard them.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>Required ID of the task that owns the managed worktree.</td></tr>
+                  <tr><th scope="row"><code>delete_branch</code></th><td>Also remove the task’s branch. Default: false.</td></tr>
+                  <tr><th scope="row"><code>force</code></th><td>Force worktree removal and branch deletion if requested. Can discard work. Default: false.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-9">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-9" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "name": "codex_cleanup_worktree",
+  "arguments": {
+    "task_id": "task-a",
+    "delete_branch": true
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-10">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-10" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "task_id": "task-a",
+  "cleaned": true,
+  "branch_deleted": true
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Merge accepted changes before removing the worktree.</p>
+          </article>
+          <article class="ledger-panel" id="tool-monitor">
+            <header class="instrument-title"><h3>codex_monitor</h3><span class="mode off">background: off</span></header>
+            <p>Open a side panel or full-page view in Antigravity App, or get a snapshot of running and recent tasks with their effective model, reasoning effort, elapsed time, and recent activity. For each setting, the live rollout’s <code>turn_context</code> takes precedence, followed by an explicit <code>codex_dispatch</code> or <code>codex_resume</code> override, the previous round, then project and user <code>.codex/config.toml</code> defaults. The monitor flags settings that differ from the configured defaults.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>Optional ID of the task to select.</td></tr>
+                  <tr><th scope="row"><code>limit</code></th><td>Optional cap on the number of tasks listed. Use a non-negative integer. Default is 20.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-11">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-11" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "codex_monitor",
+    "arguments": {"task_id": "task-a", "limit": 5}
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-12">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-12" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "structuredContent": {
+    "active_count": 1,
+    "selected_task": {
+      "task_id": "task-a",
+      "status": "running",
+      "effective_model": "gpt-6.2-sol",
+      "effective_reasoning_effort": "high",
+      "model_source": "runtime_rollout",
+      "config_reasoning_effort": "xhigh",
+      "elapsed_seconds": 42.3,
+      "current_activity": "▶ python3 -m unittest"
+    }
+  }
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Opens the live side-panel monitor in Antigravity App. While tasks are active, it refreshes every 2s via tools/call at zero LLM tokens. When idle, it refreshes every 8s.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="folio" id="worktrees" aria-labelledby="worktrees-heading">
+        <header class="folio-heading">
+          <p class="rubric"><span aria-hidden="true">✦</span>Folio V · Tabula IV</p>
+          <h2 id="worktrees-heading">Worktrees &amp; the runtime ledger</h2>
+          <p>Each managed task gets a Git checkout on its own branch. The task ledger stores specs, feedback, process events, stderr, and reports by round.</p>
+        </header>
+        <figure class="plate-frame">
+          <svg class="schematic vault-drawing" viewBox="0 0 620 289" role="img" aria-labelledby="vault-svg-title vault-svg-desc">
+            <title id="vault-svg-title">Task records and managed Git worktrees</title>
+            <desc id="vault-svg-desc">The Castor state directory holds a tasks directory for specs, metadata, events, logs, reports, and feedback and a worktrees directory for checkouts on codex slash task ID branches.</desc>
+            <path class="guide" d="M310 2v270M19 75h582M19 260h582m-569-248h17m-9-8v17m531-9h17m-8-8v17m-548 243h17m-9-8v17m531-9h17m-8-8v17" stroke-dasharray="3 4"/>
+            <g filter="url(#ink-roughen)">
+              <path class="pen paper-fill" d="M121 20q197-3 378 0l-2 50q-181 2-376 0z"/>
+              <path class="hatching" d="M122 21h60v48h-60zm315 0h60v48h-60z"/>
+              <path class="pen" marker-end="url(#arrow-ink)" d="M290 71q-5 20-53 20-75 0-75 29"/>
+              <path class="blue" marker-end="url(#arrow-blue)" d="M330 71q5 20 53 20 75 0 75 29"/>
+              <path class="pen paper-fill" d="M31 124q98-4 262-2l-2 130q-149 3-260 0z"/>
+              <path class="blue paper-fill" d="M327 124q125-3 262-2l-1 130q-121 3-261 0z"/>
+              <path class="pen fine" d="M37 130q114-4 250-2l-2 118q-126 3-248 0z"/>
+              <path class="blue fine" d="M333 130q124-3 250-2l-1 118q-116 3-249 0z"/>
+              <path class="pen fine" d="M55 167v69m0-46h16m-16 21h16m-16 25h16"/>
+              <path class="blue fine" d="M350 167v69m0-46h16m-16 21h16m-16 25h16"/>
+            </g>
+            <g text-anchor="middle">
+              <text class="label" x="310" y="46">Castor state directory</text>
+              <text class="type" x="310" y="63">~/.gemini/codex-castor/</text>
+              <text class="label" x="162" y="154">Task ledger</text>
+              <text class="label blue-text" x="458" y="154">Managed worktrees</text>
+            </g>
+            <g class="type">
+              <text x="77" y="178">tasks/&lt;task_id&gt;/</text>
+              <text x="77" y="196">spec.md / meta.json</text>
+              <text x="77" y="217">events-r1.jsonl</text>
+              <text x="77" y="241">report-r1.json</text>
+              <text class="blue-text" x="372" y="178">worktrees/&lt;task_id&gt;/</text>
+              <text class="blue-text" x="372" y="196">codex/&lt;task_id&gt;</text>
+              <text class="blue-text" x="372" y="217">base_ref · default HEAD</text>
+              <text class="blue-text" x="372" y="241">Separate Git checkout</text>
+            </g>
+          </svg>
+          <figcaption>The task ledger also keeps <code>stderr-r1.log</code> and, after rework starts, <code>feedback-r2.md</code> and the second round’s files. Set <code>CODEX_CASTOR_STATE_DIR</code> to move the runtime root. Set <code>CODEX_BIN</code> to select the local Codex executable.</figcaption>
+        </figure>
+        <div class="catalog">
+          <article><h3>MCP Server &amp; Schema</h3><p>The server reads live model and effort from rollouts, records activity in <code>meta.json</code>, and sends opt-in MCP progress and log notifications. The schema defines the six-field report. The MCP App at <code>ui://codex-castor/monitor.html</code> opens in Antigravity App.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/server.py"><code>mcp/server.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/report.schema.json"><code>mcp/report.schema.json</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/monitor.html"><code>mcp/monitor.html</code></a></div></article>
+          <article><h3>Orchestrator Skill</h3><p>The architect’s procedure for writing a spec, delegating, and independently accepting work.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/skills/codex-orchestrator/SKILL.md"><code>skills/codex-orchestrator/SKILL.md</code></a></div></article>
+          <article><h3>Global Protocol &amp; Config</h3><p>Role division, MCP registration, and background settings for Antigravity.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/config/GEMINI.md"><code>config/GEMINI.md</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/config/mcp_config.example.json"><code>config/mcp_config.example.json</code></a></div></article>
+          <article><h3>Installer, Doctor &amp; Tests</h3><p>Install Codex Castor, verify the MCP handshake, and run the tests. Open the live terminal dashboard, stream events with <code>--follow</code>, or see active tasks in the Antigravity CLI status bar.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.py"><code>scripts/install.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.sh"><code>scripts/install.sh</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/doctor.py"><code>scripts/doctor.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/watch.py"><code>scripts/watch.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/statusline.py"><code>scripts/statusline.py</code></a> <a href="https://github.com/JAY201368/codex-castor/tree/main/tests/"><code>tests/</code></a></div></article>
+        </div>
+      </section>
+
+      <section class="folio" id="install" aria-labelledby="install-heading">
+        <header class="folio-heading">
+          <p class="rubric"><span aria-hidden="true">❧</span>Folio VI · Tabula V</p>
+          <h2 id="install-heading">Quickstart inscription</h2>
+          <p>Requires Python 3.9+, Git, a configured local Codex CLI, and Antigravity. Run these commands from your terminal.</p>
+        </header>
+        <ol class="inscriptions">
+          <li class="inscription">
+            <h3 id="command-title-1">Install Codex Castor</h3>
+            <p>Clone the repository and run the installer. Add <code>--install-statusline</code> to show active tasks below Antigravity CLI’s built-in status bar. Reload Antigravity afterward.</p>
+            <div class="command" data-copy-block>
+              <pre><code>git clone https://github.com/JAY201368/codex-castor.git &amp;&amp; cd codex-castor &amp;&amp; ./scripts/install.sh</code></pre>
+              <button type="button" class="copy-button" aria-describedby="command-title-1" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>
+            </div>
+          </li>
+          <li class="inscription">
+            <h3 id="command-title-2">Verify the installation</h3>
+            <p>From the clone, check the installed configuration and run an MCP stdio handshake.</p>
+            <div class="command" data-copy-block>
+              <pre><code>python3 scripts/doctor.py</code></pre>
+              <button type="button" class="copy-button" aria-describedby="command-title-2" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>
+            </div>
+          </li>
+          <li class="inscription">
+            <h3 id="command-title-3">Uninstall when needed</h3>
+            <p>Remove the installer-managed integration. Add <code>--purge-state</code> if you also want to remove saved Castor state.</p>
+            <div class="command" data-copy-block>
+              <pre><code>python3 scripts/install.py --uninstall</code></pre>
+              <button type="button" class="copy-button" aria-describedby="command-title-3" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>
+            </div>
+          </li>
+        </ol>
+        <p class="sr-only" aria-live="polite" data-copy-status></p>
+        <aside class="security" aria-labelledby="security-heading">
+          <h3 id="security-heading">Full permissions &amp; independent review</h3>
+          <p>Dispatch and resume both pass <code>--dangerously-bypass-approvals-and-sandbox</code> and <code>--dangerously-bypass-hook-trust</code> for unattended execution. Use Codex Castor in trusted local developer workspaces. Git worktrees separate checkouts while Codex retains your local user permissions. Inspect the diff and run checks independently before merging.</p>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="colophon">
+      <div>
+        <strong>Codex Castor</strong>
+        <p><a href="https://github.com/JAY201368/codex-castor/blob/main/LICENSE">MIT</a> · <a href="index.zh-CN.html" lang="zh-CN" hreflang="zh-CN">简体中文</a> · <a href="https://github.com/JAY201368/codex-castor">GitHub ↗</a></p>
+      </div>
+      <svg class="wax" viewBox="0 0 120 120" role="img" aria-label="Codex Castor wax seal, MIT, 2026">
+        <path d="M61 8c8-4 13 4 21 4 11-1 13 10 21 13 8 4 5 11 9 19 6 9 1 16 2 24 2 9-9 13-9 22-3 9-13 9-18 16-6 8-15 3-24 8-7 3-15-3-23-3-10 1-14-9-22-12-8-4-5-12-10-19-5-8 0-16-3-24-3-8 7-13 7-22 1-9 12-12 16-18 7-8 15-4 22-9 4-2 8-1 11 1Z" fill="url(#wax-fill)" stroke="#76271f" stroke-width="2" filter="url(#ink-roughen)"/>
+        <circle cx="60" cy="59" r="43" fill="none" stroke="#e37a5b" stroke-opacity=".65" stroke-width="2"/>
+        <circle cx="60" cy="59" r="40" fill="none" stroke="#64201b" stroke-opacity=".78" stroke-width="1.2" stroke-dasharray="2 2"/>
+        <path transform="translate(33.7 28.5) scale(.84)" fill="none" stroke="#f1b08a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+              d="M24 8C11 12 5 23 7 35c1 4 2 7 4 10m2-28 3 2m-8 5 4 1
+                 M44 43C36 53 25 57 13 48m35-4c-6 11-19 17-31 11
+                 M50 38.5l2-.5c2-1 3-4 1-6-4-4-7-8-9-11l-1-6-3 2-5-7-1 7c-5 3-8 8-9 14-1 7-3 13-8 17 6 5 14 4 20 0-3-4-3-9 0-14l6.7 3.8
+                 M30 24c-3 5-2 13-8 21m16-24c0 6 2 11 7 15m-6-8 7-3m-2.5 4.8h.1
+                 M50.3 40.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z
+                 M47 7.5l1.6 3.9L53 13l-4.4 1.6-1.6 3.9-1.6-3.9L41 13l4.4-1.6ZM56 21h.1"/>
+        <text fill="#ffe0ae" font-family="Georgia, serif" font-size="7.6" letter-spacing=".55"><textPath href="#wax-legend" startOffset="50%" text-anchor="middle">CODEX CASTOR · MMXXVI</textPath></text>
+        <text x="60" y="88" text-anchor="middle" fill="#ffe0ae" font-family="var(--display)" font-size="9">MIT · MMXXVI</text>
+      </svg>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "blocked", "failed"],
+      "description": "Overall completion status of the assigned task."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Concise 2-5 sentence summary of what was implemented or why the task stopped."
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of created, modified, or deleted file paths relative to the working directory."
+    },
+    "commands_run": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Key build, lint, or test commands executed along with their brief outcome."
+    },
+    "tests_summary": {
+      "type": "string",
+      "description": "Summary of test and verification outcomes, or 'not run' with the reason."
+    },
+    "open_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Remaining risks, caveats, assumptions, or blockers requiring Gemini review."
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "files_changed",
+    "commands_run",
+    "tests_summary",
+    "open_issues"
+  ]
+}
