@@ -95,7 +95,7 @@
       <nav class="folio-nav" aria-label="Manuscript folios">
         <a href="#architecture">Architecture</a>
         <a href="#async-cycle">Async Cycle</a>
-        <a href="#instruments">Six Instruments</a>
+        <a href="#instruments">Seven Instruments</a>
         <a href="#worktrees">Worktrees &amp; Toolkit</a>
         <a href="#install">Install</a>
       </nav>
@@ -113,7 +113,7 @@
           <svg class="pen-rule" viewBox="0 0 276 13" preserveAspectRatio="none" aria-hidden="true">
             <path d="M1 6C48 3 60 8 110 5S215 4 274 6M8 10Q94 8 172 9T252 8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" filter="url(#ink-roughen)"/>
           </svg>
-          <p class="thesis">Gemini (Antigravity) writes the brief. Local Codex CLI builds in isolated Git worktrees. A zero-dependency MCP stdio server returns the work for review without a single poll.</p>
+          <p class="thesis">Gemini (Antigravity) writes the brief. Local Codex CLI builds, using isolated Git worktrees for parallel runs. Castor’s zero-dependency MCP stdio server returns results without polling. It records dispatch history and real user feedback so you can refine model and reasoning settings and keep improving the workflow.</p>
           <div class="hero-actions">
             <a class="ink-button" href="#architecture">Inspect the Architecture <span aria-hidden="true">↓</span></a>
             <a class="ink-button light" href="#install">Install Codex Castor <span aria-hidden="true">↗</span></a>
@@ -143,7 +143,7 @@
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">§</span>Folio II · Tabula I</p>
           <h2 id="architecture-heading">The dual-mind architecture</h2>
-          <p>The patron and architect agree on the work. Castor carries the brief into the local workshop and returns a compact result for independent review.</p>
+          <p>The patron and architect agree on the work. Castor sends the brief to local Codex and returns a compact result for independent review. Dispatch metrics and the user’s response help the architect refine model and reasoning choices and adapt the way they work together.</p>
         </header>
         <figure class="plate-frame">
           <svg class="schematic architecture-drawing" viewBox="0 0 660 524" role="img" aria-labelledby="arch-svg-title arch-svg-desc">
@@ -219,7 +219,7 @@
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">✦</span>Folio III · Tabula II</p>
           <h2 id="cycle-heading">The zero-polling cycle</h2>
-          <p>Antigravity runs dispatch and resume in the background. End the turn after dispatch, or work on something unrelated until the result arrives.</p>
+          <p>Antigravity runs dispatch and resume in the background. End the turn or work on something unrelated until the result arrives. Each run and user reply add to the record that informs the next dispatch.</p>
         </header>
         <div class="cycle-layout">
           <figure class="plate-frame">
@@ -261,10 +261,10 @@
           </figure>
           <ol class="cycle-steps">
             <li><h3>Draft the spec</h3><p>Gemini reads the repository and writes a six-part Markdown brief covering objective, context, detailed requirements, constraints, verification, and acceptance.</p></li>
-            <li><h3>Dispatch in background</h3><p>Call <code>codex_dispatch</code> with <code>background: "always"</code>. Set <code>use_worktree: true</code> to create a managed checkout, and share the task ID and branch.</p></li>
+            <li><h3>Dispatch in background</h3><p>Before the session’s first dispatch, check <code>~/.codex/models_cache.json</code> for available models and reasoning levels, with <code>~/.codex/config.toml</code> as fallback. Use outcomes and feedback from similar tasks to choose <code>model</code> and <code>reasoning_effort</code> and pass them explicitly to <code>codex_dispatch</code> (<code>background: "always"</code>). Start each dispatch or resume <code>toolSummary</code> with <code>[&lt;model&gt;·&lt;effort&gt;]</code>. Set <code>use_worktree: true</code> for parallel workers in one repository. Share the task ID and branch when enabled.</p></li>
             <li><h3>Yield at zero tokens</h3><p>Gemini yields while Codex works autonomously. Skip polling loops, polling timers, and sleeps.</p></li>
             <li><h3>Wake on completion</h3><p>Antigravity wakes Gemini on tool return with the JSON report and <code>git.diff_stat</code>.</p></li>
-            <li><h3>Review independently</h3><p>Inspect the diff and run the checks. Merge accepted changes before <code>codex_cleanup_worktree</code>, or send specific feedback through <code>codex_resume</code> to preserve session memory.</p></li>
+            <li><h3>Review independently</h3><p>Inspect the diff and run the checks. Merge accepted changes before <code>codex_cleanup_worktree</code>, or send specific feedback through <code>codex_resume</code> to preserve session memory.</p><p>Report model·effort, rounds and reworks, total duration, and total tokens in the acceptance summary. After presenting any round, Gemini records the first user reply verbatim using <code>codex_feedback</code> with that <code>task_id</code> and <code>round</code>, including any rating, verdict, tags, or notes the user gives. Users can also rate or leave notes in Codex Monitor. Use this record to refine Step II’s settings and address what users found difficult in the workflow.</p></li>
           </ol>
         </div>
       </section>
@@ -272,16 +272,17 @@
       <section class="folio" id="instruments" aria-labelledby="instruments-heading">
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">§</span>Folio IV · Tabula III</p>
-          <h2 id="instruments-heading">Six MCP instruments</h2>
-          <p>All six tools load eagerly (<code>eager: true</code>), with async background mode configured in Antigravity. Select a tool to inspect its parameters, call payload, and returned result.</p>
+          <h2 id="instruments-heading">Seven MCP instruments</h2>
+          <p>All seven tools load eagerly (<code>eager: true</code>), with async background mode configured in Antigravity. Select a tool to inspect its parameters, call payload, and returned result.</p>
         </header>
         <div data-instrument-ledger>
           <div class="tab-index" data-instrument-index aria-label="Choose an MCP instrument">
             <a id="tab-dispatch" href="#tool-dispatch"><code>codex_dispatch</code><span class="mode always">background: always</span></a>
             <a id="tab-resume" href="#tool-resume"><code>codex_resume</code><span class="mode always">background: always</span></a>
+            <a id="tab-feedback" href="#tool-feedback"><code>codex_feedback</code><span class="mode off">background: off</span></a>
             <a id="tab-status" href="#tool-status"><code>codex_status</code><span class="mode off">background: off</span></a>
             <a id="tab-cancel" href="#tool-cancel"><code>codex_cancel</code><span class="mode off">background: off</span></a>
-            <a id="tab-cleanup_worktree" href="#tool-cleanup_worktree"><code>codex_cleanup_worktree</code><span class="mode off">background: off</span></a>
+            <a id="tab-cleanup_worktree" href="#tool-cleanup_worktree"><code>codex_cleanup_<wbr>worktree</code><span class="mode off">background: off</span></a>
             <a id="tab-monitor" href="#tool-monitor"><code>codex_monitor</code><span class="mode off">background: off</span></a>
           </div>
           <article class="ledger-panel" id="tool-dispatch">
@@ -293,9 +294,10 @@
                 <tbody>
                   <tr><th scope="row"><code>workdir</code></th><td>Required absolute path to the target directory.</td></tr>
                   <tr><th scope="row"><code>spec / spec_file</code></th><td>Provide Markdown text or the absolute path to a spec file.</td></tr>
+                  <tr><th scope="row"><code>title</code></th><td>Optional concise, human-readable task title.</td></tr>
                   <tr><th scope="row"><code>task_id</code></th><td>Optional unique ID. The server generates one when omitted.</td></tr>
                   <tr><th scope="row"><code>use_worktree / base_ref</code></th><td>Create a managed worktree and select its base. Defaults: false and HEAD.</td></tr>
-                  <tr><th scope="row"><code>model / reasoning_effort</code></th><td>Optional Codex model and reasoning overrides.</td></tr>
+                  <tr><th scope="row"><code>model / reasoning_effort</code></th><td>Optional overrides at the tool level. The orchestrator skill selects both explicitly from the live <code>~/.codex/models_cache.json</code>.</td></tr>
                   <tr><th scope="row"><code>extra_writable_dirs</code></th><td>Optional paths passed through via --add-dir.</td></tr>
                 </tbody>
               </table>
@@ -307,7 +309,10 @@
   "arguments": {
     "workdir": "/home/dev/project",
     "spec_file": "/home/dev/specs/task-a.md",
+    "title": "Document the CLI",
     "task_id": "task-a",
+    "model": "gpt-6.2-sol",
+    "reasoning_effort": "high",
     "use_worktree": true
   }
 }</code></pre></div>
@@ -317,6 +322,12 @@
   "task_id": "task-a",
   "round": 1,
   "status": "completed",
+  "duration_seconds": 38.5,
+  "effective_model": "gpt-6.2-sol",
+  "effective_reasoning_effort": "high",
+  "rework_count": 0,
+  "total_duration_seconds": 38.5,
+  "total_usage": {"input_tokens": 3600, "output_tokens": 900, "total_tokens": 4500},
   "report": {
     "status": "completed",
     "summary": "Documented the CLI.",
@@ -367,6 +378,11 @@
   "task_id": "task-a",
   "round": 2,
   "status": "completed",
+  "duration_seconds": 20.2,
+  "usage": {"input_tokens": 2400, "output_tokens": 600},
+  "rework_count": 1,
+  "total_duration_seconds": 58.7,
+  "total_usage": {"input_tokens": 6000, "output_tokens": 1500, "total_tokens": 7500},
   "git": {
     "branch": "codex/task-a",
     "diff_stat": "README.md | 3 +++"
@@ -375,6 +391,71 @@
               </div>
             </div>
             <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Cite the file and line, include failing output, and say what should happen.</p>
+          </article>
+          <article class="ledger-panel" id="tool-feedback">
+            <header class="instrument-title"><h3>codex_feedback</h3><span class="mode off">background: off</span></header>
+            <p>Record or update a user or reviewer’s rating, verdict, tags, or notes, or save the user’s verbatim first reply after a round. These reactions stay with the task and help you refine model and effort settings and improve the day-to-day workflow. Available to the model and Codex Monitor. Updates <code>meta.json</code> and syncs <code>telemetry.jsonl</code>, <code>telemetry.csv</code>, and <code>report.md</code>.</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>Required task ID.</td></tr>
+                  <tr><th scope="row"><code>rating</code></th><td>Optional integer from 1 to 5.</td></tr>
+                  <tr><th scope="row"><code>verdict</code></th><td>Optional. Choose <code>accepted</code>, <code>rework</code>, <code>partial</code>, <code>rejected</code>, <code>abandoned</code>.</td></tr>
+                  <tr><th scope="row"><code>tags</code></th><td>Optional array of strings.</td></tr>
+                  <tr><th scope="row"><code>notes</code></th><td>Optional freeform review notes.</td></tr>
+                  <tr><th scope="row"><code>user_first_prompt</code></th><td>Optional verbatim first user reply after a round finishes.</td></tr>
+                  <tr><th scope="row"><code>round</code></th><td>Optional positive integer. Defaults to the current round.</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-feedback-call">Example call</strong><button type="button" class="copy-button" aria-describedby="sample-title-feedback-call" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "name": "codex_feedback",
+  "arguments": {
+    "task_id": "task-a",
+    "round": 2,
+    "rating": 5,
+    "verdict": "accepted",
+    "tags": [
+      "docs"
+    ],
+    "notes": "The config path is clear now.",
+    "user_first_prompt": "Looks good, 5/5. The config path is clear now."
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-feedback-return">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-feedback-return" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
+                  <pre><code>{
+  "task_id": "task-a",
+  "feedback": {
+    "rating": 5,
+    "verdict": "accepted",
+    "tags": [
+      "docs"
+    ],
+    "notes": "The config path is clear now.",
+    "updated_at": "2026-11-27T08:22:09Z",
+    "user_first_prompts": [
+      {
+        "round": 2,
+        "prompt": "Looks good, 5/5. The config path is clear now.",
+        "recorded_at": "2026-11-27T08:22:09Z"
+      }
+    ]
+  },
+  "rework_count": 1,
+  "total_duration_seconds": 58.7,
+  "total_usage": {
+    "input_tokens": 6000,
+    "output_tokens": 1500,
+    "total_tokens": 7500
+  }
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Gemini automatically saves the first reply after presenting a round. Rate or annotate the task in Codex Monitor to add context for future dispatches.</p>
           </article>
           <article class="ledger-panel" id="tool-status">
             <header class="instrument-title"><h3>codex_status</h3><span class="mode off">background: off</span></header>
@@ -474,13 +555,16 @@
           </article>
           <article class="ledger-panel" id="tool-monitor">
             <header class="instrument-title"><h3>codex_monitor</h3><span class="mode off">background: off</span></header>
-            <p>Open a side panel or full-page view in Antigravity App, or get a snapshot of running and recent tasks with their effective model, reasoning effort, elapsed time, and recent activity. For each setting, the live rollout’s <code>turn_context</code> takes precedence, followed by an explicit <code>codex_dispatch</code> or <code>codex_resume</code> override, the previous round, then project and user <code>.codex/config.toml</code> defaults. The monitor flags settings that differ from the configured defaults.</p>
+            <p>Open Codex Monitor in the Antigravity App side panel or full-page view, or read the structured snapshot. <strong>Tasks</strong> has a live section and collapsible <strong>By Project</strong> groups for settled tasks, newest first by finish time. Cards show effective model and effort pills and show concise failure reasons when available. The server stores extracted reasons in <code>error_summary</code> and surfaces them in <code>latest_activity</code>. Open the session detail sheet for configuration, runtime, prompt history, and activity, with expanded prompt and stream views. Cancel live tasks or enter a rating, verdict, and notes inline.</p>
+            <p><strong>Analytics</strong> shows overall KPIs and a Model × Reasoning Effort matrix. Use outcomes and ratings from past dispatches to compare settings for real work and choose a configuration for the next task. The KPIs and matrix exclude failed tasks.</p>
+            <p>For each setting, the server checks the current rollout’s <code>turn_context</code>, an explicit dispatch or resume override, the previous round, project <code>.codex/config.toml</code>, then user <code>~/.codex/config.toml</code> (or <code>$CODEX_HOME/config.toml</code>).</p>
             <div class="ledger-content">
               <table class="parameters">
                 <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
                 <tbody>
                   <tr><th scope="row"><code>task_id</code></th><td>Optional ID of the task to select.</td></tr>
                   <tr><th scope="row"><code>limit</code></th><td>Optional cap on the number of tasks listed. Use a non-negative integer. Default is 20.</td></tr>
+                  <tr><th scope="row"><code>include_detail</code></th><td>Optional boolean, default <code>false</code>. With <code>task_id</code>, <code>true</code> returns <code>task_detail</code> with prompt history and the activity stream across rounds, trimmed to fit the response size budget.</td></tr>
                 </tbody>
               </table>
               <div>
@@ -492,29 +576,47 @@
   "method": "tools/call",
   "params": {
     "name": "codex_monitor",
-    "arguments": {"task_id": "task-a", "limit": 5}
+    "arguments": {"task_id": "task-a", "limit": 5, "include_detail": true}
   }
 }</code></pre></div>
                 <div class="sample" data-copy-block>
                   <div class="sample-heading"><strong id="sample-title-12">Return excerpt</strong><button type="button" class="copy-button" aria-describedby="sample-title-12" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button></div>
                   <pre><code>{
   "structuredContent": {
-    "active_count": 1,
+    "active_count": 0,
     "selected_task": {
       "task_id": "task-a",
-      "status": "running",
+      "status": "completed",
       "effective_model": "gpt-6.2-sol",
       "effective_reasoning_effort": "high",
-      "model_source": "runtime_rollout",
-      "config_reasoning_effort": "xhigh",
-      "elapsed_seconds": 42.3,
-      "current_activity": "▶ python3 -m unittest"
-    }
+      "elapsed_seconds": 20.2,
+      "latest_activity": {
+        "kind": "report",
+        "text": "Documented the CLI and config path."
+      }
+    },
+    "task_detail": {
+      "task_id": "task-a"
+    },
+    "analytics": {
+      "overall": {
+        "task_count": 1,
+        "total_tokens": 7500
+      },
+      "by_model_effort": [
+        {
+          "model": "gpt-6.2-sol",
+          "reasoning_effort": "high",
+          "task_count": 1
+        }
+      ]
+    },
+    "telemetry_dir": "~/.gemini/codex-castor"
   }
 }</code></pre></div>
               </div>
             </div>
-            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Opens the live side-panel monitor in Antigravity App. While tasks are active, it refreshes every 2s via tools/call at zero LLM tokens. When idle, it refreshes every 8s.</p>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Codex Monitor refreshes via <code>tools/call</code> every 1s when any task is active or the selected task is live, and every 8s when idle, at zero LLM tokens.</p>
           </article>
         </div>
       </section>
@@ -523,49 +625,55 @@
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">✦</span>Folio V · Tabula IV</p>
           <h2 id="worktrees-heading">Worktrees &amp; the runtime ledger</h2>
-          <p>Each managed task gets a Git checkout on its own branch. The task ledger stores specs, feedback, process events, stderr, and reports by round.</p>
+          <p>Each managed task runs in a Git checkout on its own branch. The ledger saves specs, feedback, events, stderr, and reports by round. Castor syncs dispatch history and user feedback across <code>telemetry.jsonl</code>, <code>telemetry.csv</code>, and <code>report.md</code> to guide future model and reasoning settings and improve the workflow with use.</p>
         </header>
         <figure class="plate-frame">
-          <svg class="schematic vault-drawing" viewBox="0 0 620 289" role="img" aria-labelledby="vault-svg-title vault-svg-desc">
+          <svg class="schematic vault-drawing" viewBox="0 0 620 343" role="img" aria-labelledby="vault-svg-title vault-svg-desc">
             <title id="vault-svg-title">Task records and managed Git worktrees</title>
-            <desc id="vault-svg-desc">The Castor state directory holds a tasks directory for specs, metadata, events, logs, reports, and feedback and a worktrees directory for checkouts on codex slash task ID branches.</desc>
-            <path class="guide" d="M310 2v270M19 75h582M19 260h582m-569-248h17m-9-8v17m531-9h17m-8-8v17m-548 243h17m-9-8v17m531-9h17m-8-8v17" stroke-dasharray="3 4"/>
+            <desc id="vault-svg-desc">The Castor state directory contains telemetry.jsonl, telemetry.csv, and report.md directly at its root. Under tasks, each task keeps its specs, metadata, events, logs, reports, and feedback. Under worktrees, each checkout uses a codex slash task ID branch.</desc>
+            <path class="guide" d="M310 2v324M19 115h582M19 314h582m-569-302h17m-9-8v17m531-9h17m-8-8v17m-548 297h17m-9-8v17m531-9h17m-8-8v17" stroke-dasharray="3 4"/>
             <g filter="url(#ink-roughen)">
-              <path class="pen paper-fill" d="M121 20q197-3 378 0l-2 50q-181 2-376 0z"/>
-              <path class="hatching" d="M122 21h60v48h-60zm315 0h60v48h-60z"/>
-              <path class="pen" marker-end="url(#arrow-ink)" d="M290 71q-5 20-53 20-75 0-75 29"/>
-              <path class="blue" marker-end="url(#arrow-blue)" d="M330 71q5 20 53 20 75 0 75 29"/>
-              <path class="pen paper-fill" d="M31 124q98-4 262-2l-2 130q-149 3-260 0z"/>
-              <path class="blue paper-fill" d="M327 124q125-3 262-2l-1 130q-121 3-261 0z"/>
-              <path class="pen fine" d="M37 130q114-4 250-2l-2 118q-126 3-248 0z"/>
-              <path class="blue fine" d="M333 130q124-3 250-2l-1 118q-116 3-249 0z"/>
-              <path class="pen fine" d="M55 167v69m0-46h16m-16 21h16m-16 25h16"/>
-              <path class="blue fine" d="M350 167v69m0-46h16m-16 21h16m-16 25h16"/>
+              <path class="pen paper-fill" d="M75 20q245-3 470 0l-2 90q-225 2-468 0z"/>
+              <path class="hatching" d="M76 21h68v48H76zm400 0h67v48h-67z"/>
+              <path class="pen fine" d="M87 78q213 2 446 0"/>
+              <g transform="translate(0 40)">
+                <path class="pen" marker-end="url(#arrow-ink)" d="M290 71q-5 20-53 20-75 0-75 29"/>
+                <path class="blue" marker-end="url(#arrow-blue)" d="M330 71q5 20 53 20 75 0 75 29"/>
+                <path class="pen paper-fill" d="M31 124q98-4 262-2l-2 144q-149 3-260 0z"/>
+                <path class="blue paper-fill" d="M327 124q125-3 262-2l-1 144q-121 3-261 0z"/>
+                <path class="pen fine" d="M37 130q114-4 250-2l-2 132q-126 3-248 0z"/>
+                <path class="blue fine" d="M333 130q124-3 250-2l-1 132q-116 3-249 0z"/>
+                <path class="pen fine" d="M55 168v78m0-48h16m-16 24h16m-16 24h16"/>
+                <path class="blue fine" d="M350 168v78m0-48h16m-16 24h16m-16 24h16"/>
+              </g>
             </g>
             <g text-anchor="middle">
-              <text class="label" x="310" y="46">Castor state directory</text>
-              <text class="type" x="310" y="63">~/.gemini/codex-castor/</text>
-              <text class="label" x="162" y="154">Task ledger</text>
-              <text class="label blue-text" x="458" y="154">Managed worktrees</text>
+              <text class="label" x="310" y="44">Castor state directory</text>
+              <text class="type" x="310" y="69">~/.gemini/codex-castor/</text>
+              <text class="type" x="160" y="99">telemetry.jsonl</text>
+              <text class="type" x="310" y="99">telemetry.csv</text>
+              <text class="type" x="460" y="99">report.md</text>
+              <text class="label" x="162" y="194">Task ledger</text>
+              <text class="label blue-text" x="458" y="194">Managed worktrees</text>
             </g>
             <g class="type">
-              <text x="77" y="178">tasks/&lt;task_id&gt;/</text>
-              <text x="77" y="196">spec.md / meta.json</text>
-              <text x="77" y="217">events-r1.jsonl</text>
-              <text x="77" y="241">report-r1.json</text>
-              <text class="blue-text" x="372" y="178">worktrees/&lt;task_id&gt;/</text>
-              <text class="blue-text" x="372" y="196">codex/&lt;task_id&gt;</text>
-              <text class="blue-text" x="372" y="217">base_ref · default HEAD</text>
-              <text class="blue-text" x="372" y="241">Separate Git checkout</text>
+              <text x="77" y="220">tasks/&lt;task_id&gt;/</text>
+              <text x="77" y="244">spec.md / meta.json</text>
+              <text x="77" y="268">events-r1.jsonl</text>
+              <text x="77" y="292">report-r1.json</text>
+              <text class="blue-text" x="372" y="220">worktrees/&lt;task_id&gt;/</text>
+              <text class="blue-text" x="372" y="244">codex/&lt;task_id&gt;</text>
+              <text class="blue-text" x="372" y="268">base_ref · default HEAD</text>
+              <text class="blue-text" x="372" y="292">Separate Git checkout</text>
             </g>
           </svg>
-          <figcaption>The task ledger also keeps <code>stderr-r1.log</code> and, after rework starts, <code>feedback-r2.md</code> and the second round’s files. Set <code>CODEX_CASTOR_STATE_DIR</code> to move the runtime root. Set <code>CODEX_BIN</code> to select the local Codex executable.</figcaption>
+          <figcaption>The root exports preserve how configurations performed alongside what users asked to change. Failed tasks remain in the records and are excluded from analytics aggregates. The task ledger also keeps <code>stderr-r1.log</code> and, after rework starts, <code>feedback-r2.md</code> and the second round’s files. Set <code>CODEX_CASTOR_STATE_DIR</code> to move the runtime root and <code>CODEX_BIN</code> to select the local Codex executable.</figcaption>
         </figure>
         <div class="catalog">
-          <article><h3>MCP Server &amp; Schema</h3><p>The server reads live model and effort from rollouts, records activity in <code>meta.json</code>, and sends opt-in MCP progress and log notifications. The schema defines the six-field report. The MCP App at <code>ui://codex-castor/monitor.html</code> opens in Antigravity App.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/server.py"><code>mcp/server.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/report.schema.json"><code>mcp/report.schema.json</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/monitor.html"><code>mcp/monitor.html</code></a></div></article>
-          <article><h3>Orchestrator Skill</h3><p>The architect’s procedure for writing a spec, delegating, and independently accepting work.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/skills/codex-orchestrator/SKILL.md"><code>skills/codex-orchestrator/SKILL.md</code></a></div></article>
-          <article><h3>Global Protocol &amp; Config</h3><p>Role division, MCP registration, and background settings for Antigravity.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/config/GEMINI.md"><code>config/GEMINI.md</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/config/mcp_config.example.json"><code>config/mcp_config.example.json</code></a></div></article>
-          <article><h3>Installer, Doctor &amp; Tests</h3><p>Install Codex Castor, verify the MCP handshake, and run the tests. Open the live terminal dashboard, stream events with <code>--follow</code>, or see active tasks in the Antigravity CLI status bar.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.py"><code>scripts/install.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.sh"><code>scripts/install.sh</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/doctor.py"><code>scripts/doctor.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/watch.py"><code>scripts/watch.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/statusline.py"><code>scripts/statusline.py</code></a> <a href="https://github.com/JAY201368/codex-castor/tree/main/tests/"><code>tests/</code></a></div></article>
+          <article><h3>MCP Server &amp; Schema</h3><p>The server reads live model and effort from rollouts, records activity in <code>meta.json</code>, sends opt-in MCP progress and log notifications, and extracts concise failure summaries. The telemetry module locks updates and syncs JSONL, CSV, and Markdown exports. Failed tasks are excluded from aggregated statistics. The schema defines the six-field report. The MCP App at <code>ui://codex-castor/monitor.html</code> offers Tasks and Analytics views with inline feedback on task cards.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/server.py"><code>mcp/server.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/report.schema.json"><code>mcp/report.schema.json</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/telemetry.py"><code>mcp/telemetry.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/monitor.html"><code>mcp/monitor.html</code></a></div></article>
+          <article><h3>Orchestrator Skill</h3><p>The architect’s procedure covers self-contained specs and independent review. Look up current models in <code>~/.codex/models_cache.json</code> and route explicitly with <code>model</code> and <code>reasoning_effort</code>. Report telemetry at acceptance and record the first user reply to each presented round automatically.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/skills/codex-orchestrator/SKILL.md"><code>skills/codex-orchestrator/SKILL.md</code></a></div></article>
+          <article><h3>Global Protocol &amp; Config</h3><p>Role division, MCP registration, and background settings for seven tools. Prefix the dispatch or resume <code>toolSummary</code> with <code>[&lt;model&gt;·&lt;effort&gt;]</code> and record the first user reply with <code>codex_feedback</code>.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/config/GEMINI.md"><code>config/GEMINI.md</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/config/mcp_config.example.json"><code>config/mcp_config.example.json</code></a></div></article>
+          <article><h3>Installer, Doctor &amp; Tests</h3><p>The installer and Doctor cover the telemetry module and analytics CLI, and Doctor verifies the MCP handshake. Use <code>python3 scripts/analytics.py summary</code> with <code>--model</code>, <code>--effort</code>, <code>--project</code>, or <code>--since</code> to filter the totals and recent tasks. Use <code>backfill</code> to rebuild the ledger, <code>feedback</code> to record evaluations or first replies, and <code>export</code> to write Markdown or CSV. Run the tests, follow terminal events with <code>--follow</code>, or see active tasks in the Antigravity CLI status bar.</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.py"><code>scripts/install.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.sh"><code>scripts/install.sh</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/doctor.py"><code>scripts/doctor.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/analytics.py"><code>scripts/analytics.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/watch.py"><code>scripts/watch.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/statusline.py"><code>scripts/statusline.py</code></a> <a href="https://github.com/JAY201368/codex-castor/tree/main/tests/"><code>tests/</code></a></div></article>
         </div>
       </section>
 

@@ -235,9 +235,13 @@ figcaption { color: var(--sepia); }
 .cycle-steps li::before { position: absolute; left: .12rem; top: .56rem; content: counter(stages, upper-roman); color: var(--rubric); font: 700 1.12rem var(--display); }
 .cycle-steps h3 { margin-bottom: .16rem; font-size: 1.48rem; }
 
-.tab-index { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .6rem; }
+.tab-index {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .35rem; margin-bottom: .6rem;
+}
 .tab-index a {
-  flex: 1 0 auto; padding: .55rem .55rem .4rem; border: 1px solid var(--rule);
+  display: grid; align-content: space-between; gap: .18rem;
+  min-width: 0; padding: .55rem .55rem .4rem; border: 1px solid var(--rule);
   border-radius: 3px 7px 2px 3px / 4px 5px 3px 3px; background: #e1c99c6b;
   text-decoration: none; box-shadow: 1px 2px 0 #7c634a26;
 }
@@ -271,6 +275,7 @@ pre {
 }
 pre code { font: inherit; }
 .ledger-panel .hand-note { margin-top: .85rem; }
+.ledger-panel .hand-note:lang(en) { line-height: 1.35; }
 
 .vault-drawing { max-width: 660px; }
 .catalog { margin-top: 1.3rem; }
@@ -300,6 +305,9 @@ pre code { font: inherit; }
   .masthead { grid-template-columns: 1fr auto; gap: .24rem 1rem; min-height: 0; padding-block: .8rem .52rem; }
   .folio-nav { grid-column: 1 / -1; grid-row: 2; justify-content: start; border-top: 1px dotted var(--rule); padding-top: .35rem; }
 }
+@media (max-width: 900px) {
+  .tab-index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 768px) {
   .codex { padding-inline: clamp(23px, 5.6vw, 43px); margin: 10px; }
   .folio-rules { inset: 9px 10px; }
@@ -328,7 +336,7 @@ pre code { font: inherit; }
   .pillar small { font-size: .75rem; }
   .duties, .catalog { grid-template-columns: minmax(0, 1fr); }
   .duties article + article { border-left: 0; border-top: 1px dashed var(--rule); }
-  .tab-index a { flex-grow: 0; }
+  .tab-index a { padding-inline: .45rem; }
   .inscription { padding-left: 1.55rem; }
   .wax { width: 75px; }
 }

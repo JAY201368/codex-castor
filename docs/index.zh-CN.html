@@ -97,7 +97,7 @@
       <nav class="folio-nav" aria-label="手稿各卷">
         <a href="#architecture">系统架构</a>
         <a href="#async-cycle">零轮询流程</a>
-        <a href="#instruments">MCP 工具</a>
+        <a href="#instruments">七个 MCP 工具</a>
         <a href="#worktrees">工作树与组件</a>
         <a href="#install">快速安装</a>
       </nav>
@@ -115,7 +115,7 @@
           <svg class="pen-rule" viewBox="0 0 276 13" preserveAspectRatio="none" aria-hidden="true">
             <path d="M1 6C48 3 60 8 110 5S215 4 274 6M8 10Q94 8 172 9T252 8" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" filter="url(#ink-roughen)"/>
           </svg>
-          <p class="thesis">Gemini 在 Antigravity 中写清规格，本地 Codex CLI 在独立 Git worktree 中自主实现；零依赖 MCP stdio 服务端后台接管执行，完成后自动唤醒验收，空闲零轮询、零 token 消耗。</p>
+          <p class="thesis">Gemini 在 Antigravity 中拟定规格，本地 Codex CLI 负责实现，并行任务使用独立 Git 工作树。Castor 的零依赖 MCP stdio 服务端无需轮询便能交回结果。它记录派发历史与真实用户反馈，帮助你在实践中调优模型和推理强度，持续改善协作体验。</p>
           <div class="hero-actions">
             <a class="ink-button" href="#architecture">查看系统架构 <span aria-hidden="true">↓</span></a>
             <a class="ink-button light" href="#install">快速安装 <span aria-hidden="true">↗</span></a>
@@ -145,7 +145,7 @@
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">§</span>卷二 · 图版壹</p>
           <h2 id="architecture-heading">双脑协作架构</h2>
-          <p>架构师先与用户敲定目标与方案，再经由MCP 服务端把任务派发给本地 Codex；执行完成后自动带回精简结果，供架构师独立验收。</p>
+          <p>架构师先与用户敲定目标与方案。Castor 将规格交给本地 Codex，再带回精简结果供架构师独立验收。派发指标和用户对结果的回应，帮助架构师改进模型与推理强度的选择，并调整协作方式。</p>
         </header>
         <figure class="plate-frame">
           <svg class="schematic architecture-drawing" viewBox="0 0 660 524" role="img" aria-labelledby="arch-svg-title arch-svg-desc">
@@ -221,7 +221,7 @@
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">✦</span>卷三 · 图版贰</p>
           <h2 id="cycle-heading">零轮询执行流程</h2>
-          <p>Antigravity 在后台托管派发与续接。派发完成后直接结束当前轮次，或继续处理其他事项，等待结果自动送达即可。</p>
+          <p>Antigravity 在后台托管派发与续接。发出任务后可以结束当前轮次，或继续处理其他事项，等结果自动送达。每次运行和用户回复都会留下记录，供下一次派发参考。</p>
         </header>
         <div class="cycle-layout">
           <figure class="plate-frame">
@@ -263,10 +263,10 @@
           </figure>
           <ol class="cycle-steps">
             <li><h3>撰写规格</h3><p>Gemini 先通读仓库，再撰写包含目标、上下文、详细规格、约束、验证命令与验收标准的六段式 Markdown 规格书。</p></li>
-            <li><h3>后台派发</h3><p>调用 <code>codex_dispatch</code>（<code>background: "always"</code>）；并行修改同一仓库时开启 <code>use_worktree: true</code>，并把任务 ID 和分支同步给用户。</p></li>
+            <li><h3>后台派发</h3><p>会话首次派发前，从 <code>~/.codex/models_cache.json</code> 读取可用模型及推理等级，缓存不可用时查阅 <code>~/.codex/config.toml</code>。参考同类任务的结果和反馈，选择 <code>model</code> 和 <code>reasoning_effort</code>，显式传入 <code>codex_dispatch</code>（<code>background: "always"</code>）。每次派发或续接的 <code>toolSummary</code> 都以 <code>[&lt;model&gt;·&lt;effort&gt;]</code> 开头。同一仓库有多个并行执行者时，设置 <code>use_worktree: true</code>。向用户同步任务 ID 和启用工作树时的分支。</p></li>
             <li><h3>零 token 等待</h3><p>Codex 在后台自主编码并执行验证；Gemini 结束本轮等待，不轮询状态、不设休眠也不开定时检查。</p></li>
             <li><h3>完成即唤醒</h3><p>Codex 执行结束后，Antigravity 自动唤醒 Gemini，交回结构化 JSON 报告与 <code>git.diff_stat</code> 摘要。</p></li>
-            <li><h3>独立验收</h3><p>检查真实 diff 并独立复跑测试。验收通过后先合并改动，再调用 <code>codex_cleanup_worktree</code> 清理；若有缺陷，用 <code>codex_resume</code> 发送具体修改意见，保留原会话记忆继续返工。</p></li>
+            <li><h3>独立验收</h3><p>检查真实 diff 并独立运行验证命令。验收通过后先合并改动，再调用 <code>codex_cleanup_worktree</code> 清理。需要返工时，用 <code>codex_resume</code> 发送具体修改意见，沿用原会话上下文。</p><p>在验收摘要中列出模型与推理强度、总轮次与返工次数、累计耗时及 token 总量。汇报任一轮结果后，Gemini 会用对应的 <code>task_id</code> 和 <code>round</code> 调用 <code>codex_feedback</code>，逐字记录用户的首条回复，包括其中的评分、评审结论、标签或备注。用户也可直接在 Codex Monitor 评分或填写备注。用这些记录调整第二步的配置，并解决用户在协作中遇到的问题。</p></li>
           </ol>
         </div>
       </section>
@@ -274,16 +274,17 @@
       <section class="folio" id="instruments" aria-labelledby="instruments-heading">
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">§</span>卷四 · 图版叁</p>
-          <h2 id="instruments-heading">六个 MCP 工具</h2>
-          <p>六个工具均配置 <code>eager: true</code>，异步后台模式由 Antigravity 客户端控制。点击标签可查看各工具的参数说明、调用示例与返回结构。</p>
+          <h2 id="instruments-heading">七个 MCP 工具</h2>
+          <p>七个工具均配置 <code>eager: true</code>，异步后台模式由 Antigravity 客户端控制。点击标签可查看各工具的参数说明、调用示例与返回结构。</p>
         </header>
         <div data-instrument-ledger>
           <div class="tab-index" data-instrument-index aria-label="选择 MCP 工具">
             <a id="tab-dispatch" href="#tool-dispatch"><code>codex_dispatch</code><span class="mode always">background: always</span></a>
             <a id="tab-resume" href="#tool-resume"><code>codex_resume</code><span class="mode always">background: always</span></a>
+            <a id="tab-feedback" href="#tool-feedback"><code>codex_feedback</code><span class="mode off">background: off</span></a>
             <a id="tab-status" href="#tool-status"><code>codex_status</code><span class="mode off">background: off</span></a>
             <a id="tab-cancel" href="#tool-cancel"><code>codex_cancel</code><span class="mode off">background: off</span></a>
-            <a id="tab-cleanup_worktree" href="#tool-cleanup_worktree"><code>codex_cleanup_worktree</code><span class="mode off">background: off</span></a>
+            <a id="tab-cleanup_worktree" href="#tool-cleanup_worktree"><code>codex_cleanup_<wbr>worktree</code><span class="mode off">background: off</span></a>
             <a id="tab-monitor" href="#tool-monitor"><code>codex_monitor</code><span class="mode off">background: off</span></a>
           </div>
           <article class="ledger-panel" id="tool-dispatch">
@@ -295,9 +296,10 @@
                 <tbody>
                   <tr><th scope="row"><code>workdir</code></th><td>必填，目标工作目录的绝对路径。</td></tr>
                   <tr><th scope="row"><code>spec / spec_file</code></th><td>任务规格的 Markdown 正文，或规格文件的绝对路径（二选一）。</td></tr>
+                  <tr><th scope="row"><code>title</code></th><td>可选，简短易读的任务标题。</td></tr>
                   <tr><th scope="row"><code>task_id</code></th><td>可选，任务唯一标识；省略时由服务端自动生成。</td></tr>
                   <tr><th scope="row"><code>use_worktree / base_ref</code></th><td>是否创建独立 Git worktree（默认 false）及其基准引用（默认 HEAD）。</td></tr>
-                  <tr><th scope="row"><code>model / reasoning_effort</code></th><td>可选，临时覆盖 Codex 模型与推理强度。</td></tr>
+                  <tr><th scope="row"><code>model / reasoning_effort</code></th><td>工具层面可选。编排技能会从实时更新的 <code>~/.codex/models_cache.json</code> 显式选择模型和推理强度。</td></tr>
                   <tr><th scope="row"><code>extra_writable_dirs</code></th><td>可选，透传给 Codex --add-dir 的额外可写目录。</td></tr>
                 </tbody>
               </table>
@@ -309,7 +311,10 @@
   "arguments": {
     "workdir": "/home/dev/project",
     "spec_file": "/home/dev/specs/task-a.md",
+    "title": "补充 CLI 文档",
     "task_id": "task-a",
+    "model": "gpt-6.2-sol",
+    "reasoning_effort": "high",
     "use_worktree": true
   }
 }</code></pre></div>
@@ -319,6 +324,12 @@
   "task_id": "task-a",
   "round": 1,
   "status": "completed",
+  "duration_seconds": 38.5,
+  "effective_model": "gpt-6.2-sol",
+  "effective_reasoning_effort": "high",
+  "rework_count": 0,
+  "total_duration_seconds": 38.5,
+  "total_usage": {"input_tokens": 3600, "output_tokens": 900, "total_tokens": 4500},
   "report": {
     "status": "completed",
     "summary": "补充了 CLI 文档。",
@@ -369,6 +380,11 @@
   "task_id": "task-a",
   "round": 2,
   "status": "completed",
+  "duration_seconds": 20.2,
+  "usage": {"input_tokens": 2400, "output_tokens": 600},
+  "rework_count": 1,
+  "total_duration_seconds": 58.7,
+  "total_usage": {"input_tokens": 6000, "output_tokens": 1500, "total_tokens": 7500},
   "git": {
     "branch": "codex/task-a",
     "diff_stat": "README.md | 3 +++"
@@ -377,6 +393,71 @@
               </div>
             </div>
             <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>反馈直接写明文件与行号、失败测试输出及预期行为。</p>
+          </article>
+          <article class="ledger-panel" id="tool-feedback">
+            <header class="instrument-title"><h3>codex_feedback</h3><span class="mode off">background: off</span></header>
+            <p>记录或更新用户或评审者的评分、评审结论、标签及备注，也可逐字保存一轮结束后用户的首条回复。这些反馈随任务留存，为调优模型与推理强度、改善日常协作体验提供依据。模型和 Codex Monitor 均可调用。更新 <code>meta.json</code> 并同步 <code>telemetry.jsonl</code>、<code>telemetry.csv</code> 与 <code>report.md</code>。</p>
+            <div class="ledger-content">
+              <table class="parameters">
+                <thead><tr><th scope="col">参数</th><th scope="col">用途</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>task_id</code></th><td>必填，任务 ID。</td></tr>
+                  <tr><th scope="row"><code>rating</code></th><td>可选，1 至 5 的整数。</td></tr>
+                  <tr><th scope="row"><code>verdict</code></th><td>可选，可取 <code>accepted</code>、<code>rework</code>、<code>partial</code>、<code>rejected</code>、<code>abandoned</code>。</td></tr>
+                  <tr><th scope="row"><code>tags</code></th><td>可选，字符串数组。</td></tr>
+                  <tr><th scope="row"><code>notes</code></th><td>可选，自由填写的评审备注。</td></tr>
+                  <tr><th scope="row"><code>user_first_prompt</code></th><td>可选，一轮结束后用户首条回复的原文。</td></tr>
+                  <tr><th scope="row"><code>round</code></th><td>可选，正整数，默认为当前轮。</td></tr>
+                </tbody>
+              </table>
+              <div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-feedback-call">调用示例</strong><button type="button" class="copy-button" aria-describedby="sample-title-feedback-call" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button></div>
+                  <pre><code>{
+  "name": "codex_feedback",
+  "arguments": {
+    "task_id": "task-a",
+    "round": 2,
+    "rating": 5,
+    "verdict": "accepted",
+    "tags": [
+      "docs"
+    ],
+    "notes": "配置路径现在写清楚了。",
+    "user_first_prompt": "可以验收，5 分。配置路径现在写清楚了。"
+  }
+}</code></pre></div>
+                <div class="sample" data-copy-block>
+                  <div class="sample-heading"><strong id="sample-title-feedback-return">返回摘录</strong><button type="button" class="copy-button" aria-describedby="sample-title-feedback-return" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button></div>
+                  <pre><code>{
+  "task_id": "task-a",
+  "feedback": {
+    "rating": 5,
+    "verdict": "accepted",
+    "tags": [
+      "docs"
+    ],
+    "notes": "配置路径现在写清楚了。",
+    "updated_at": "2026-11-27T08:22:09Z",
+    "user_first_prompts": [
+      {
+        "round": 2,
+        "prompt": "可以验收，5 分。配置路径现在写清楚了。",
+        "recorded_at": "2026-11-27T08:22:09Z"
+      }
+    ]
+  },
+  "rework_count": 1,
+  "total_duration_seconds": 58.7,
+  "total_usage": {
+    "input_tokens": 6000,
+    "output_tokens": 1500,
+    "total_tokens": 7500
+  }
+}</code></pre></div>
+              </div>
+            </div>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>Gemini 汇报一轮结果后会自动保存用户的首条回复。也可在 Codex Monitor 中评分或填写备注，为后续派发补充参考。</p>
           </article>
           <article class="ledger-panel" id="tool-status">
             <header class="instrument-title"><h3>codex_status</h3><span class="mode off">background: off</span></header>
@@ -476,13 +557,16 @@
           </article>
           <article class="ledger-panel" id="tool-monitor">
             <header class="instrument-title"><h3>codex_monitor</h3><span class="mode off">background: off</span></header>
-            <p>在 Antigravity App 侧栏或整页查看运行中和近期任务，也可读取结构化快照，查看实际使用的模型、推理强度、已用时间和近期活动。模型与推理强度逐项取值，先看当前轮 rollout 的 <code>turn_context</code>，再看 <code>codex_dispatch</code> 或 <code>codex_resume</code> 显式传入的值、上一轮的值，最后查项目和用户的 <code>.codex/config.toml</code>。看板会标出与配置默认值不同的设置。</p>
+            <p>在 Antigravity App 侧栏或整页打开 Codex Monitor，也可读取结构化快照。<strong>Tasks（任务）</strong> 包含运行中区域，已结束的任务在可折叠的 <strong>By Project（按项目）</strong> 分组中按结束时间从近到远排列。任务卡片以标签展示实际使用的模型与推理强度，并在可用时显示简明的失败原因。服务端将提取的原因写入 <code>error_summary</code>，并通过 <code>latest_activity</code> 返回。打开会话详情可查看配置、运行数据、提示词历史和活动，提示词与活动流可展开阅读。可直接取消运行中的任务，或填写评分、评审结论和备注。</p>
+            <p><strong>Analytics（分析）</strong> 展示总体关键指标与模型 × 推理强度矩阵。参考历史派发的实际结果和评分，比较不同配置在真实任务中的表现，为下一次任务选择配置。两种统计均排除失败任务。</p>
+            <p>服务端逐项确定实际值，依次查找当前轮 rollout 的 <code>turn_context</code>、派发或续接时显式传入的值、上一轮的值、项目的 <code>.codex/config.toml</code> 和用户的 <code>~/.codex/config.toml</code>（或 <code>$CODEX_HOME/config.toml</code>）。</p>
             <div class="ledger-content">
               <table class="parameters">
                 <thead><tr><th scope="col">参数</th><th scope="col">用途</th></tr></thead>
                 <tbody>
                   <tr><th scope="row"><code>task_id</code></th><td>可选，指定要查看的任务。</td></tr>
                   <tr><th scope="row"><code>limit</code></th><td>可选，限制返回的任务数。须为非负整数，默认 20。</td></tr>
+                  <tr><th scope="row"><code>include_detail</code></th><td>可选布尔值，默认 <code>false</code>。提供 <code>task_id</code> 时，设为 <code>true</code> 可返回 <code>task_detail</code>，其中包含各轮提示词历史和活动流，内容按响应大小限制截取。</td></tr>
                 </tbody>
               </table>
               <div>
@@ -494,29 +578,47 @@
   "method": "tools/call",
   "params": {
     "name": "codex_monitor",
-    "arguments": {"task_id": "task-a", "limit": 5}
+    "arguments": {"task_id": "task-a", "limit": 5, "include_detail": true}
   }
 }</code></pre></div>
                 <div class="sample" data-copy-block>
                   <div class="sample-heading"><strong id="sample-title-12">返回摘录</strong><button type="button" class="copy-button" aria-describedby="sample-title-12" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button></div>
                   <pre><code>{
   "structuredContent": {
-    "active_count": 1,
+    "active_count": 0,
     "selected_task": {
       "task_id": "task-a",
-      "status": "running",
+      "status": "completed",
       "effective_model": "gpt-6.2-sol",
       "effective_reasoning_effort": "high",
-      "model_source": "runtime_rollout",
-      "config_reasoning_effort": "xhigh",
-      "elapsed_seconds": 42.3,
-      "current_activity": "▶ python3 -m unittest"
-    }
+      "elapsed_seconds": 20.2,
+      "latest_activity": {
+        "kind": "report",
+        "text": "补充了 CLI 文档与配置路径。"
+      }
+    },
+    "task_detail": {
+      "task_id": "task-a"
+    },
+    "analytics": {
+      "overall": {
+        "task_count": 1,
+        "total_tokens": 7500
+      },
+      "by_model_effort": [
+        {
+          "model": "gpt-6.2-sol",
+          "reasoning_effort": "high",
+          "task_count": 1
+        }
+      ]
+    },
+    "telemetry_dir": "~/.gemini/codex-castor"
   }
 }</code></pre></div>
               </div>
             </div>
-            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>在 Antigravity App 侧栏打开实时看板，有任务运行时每 2 秒经 tools/call 刷新，空闲时每 8 秒刷新，不消耗模型 token。</p>
+            <p class="hand-note"><svg viewBox="0 0 32 16" aria-hidden="true"><path d="M31 4Q18 18 2 6q5 0 8-4M2 6l4 7" fill="none" stroke="currentColor" stroke-linecap="round" filter="url(#ink-roughen)"/></svg>有任务运行或当前选中的任务仍在运行时，Codex Monitor 经 <code>tools/call</code> 每 1 秒刷新，空闲时每 8 秒刷新，不消耗模型 token。</p>
           </article>
         </div>
       </section>
@@ -525,49 +627,55 @@
         <header class="folio-heading">
           <p class="rubric"><span aria-hidden="true">✦</span>卷五 · 图版肆</p>
           <h2 id="worktrees-heading">工作树与运行记录</h2>
-          <p>开启隔离后，每项任务都在独立的 Git worktree 与专属分支中执行；运行记录按轮次保存规格、反馈、事件流、日志与交付报告。</p>
+          <p>启用托管工作树后，每项任务在独立的 Git 工作树与分支中执行。账本按轮次保存规格、反馈、事件、stderr 与报告。Castor 将派发历史和用户反馈同步到 <code>telemetry.jsonl</code>、<code>telemetry.csv</code> 和 <code>report.md</code>，为后续选择模型与推理强度提供依据，也让协作流程随使用不断改进。</p>
         </header>
         <figure class="plate-frame">
-          <svg class="schematic vault-drawing" viewBox="0 0 620 289" role="img" aria-labelledby="vault-svg-title vault-svg-desc">
+          <svg class="schematic vault-drawing" viewBox="0 0 620 343" role="img" aria-labelledby="vault-svg-title vault-svg-desc">
             <title id="vault-svg-title">任务记录与托管 Git 工作树</title>
-            <desc id="vault-svg-desc">Castor 的状态目录包含 tasks 任务记录目录和 worktrees 工作树目录。任务记录含规格、元数据、事件、日志、报告和反馈。各工作树使用独立的 codex 前缀分支。</desc>
-            <path class="guide" d="M310 2v270M19 75h582M19 260h582m-569-248h17m-9-8v17m531-9h17m-8-8v17m-548 243h17m-9-8v17m531-9h17m-8-8v17" stroke-dasharray="3 4"/>
+            <desc id="vault-svg-desc">Castor 状态根目录直接存放 telemetry.jsonl、telemetry.csv 和 report.md。tasks 下的每项任务保留规格、元数据、事件、日志、报告和反馈。worktrees 下的各工作树使用带 codex 前缀和任务 ID 的独立分支。</desc>
+            <path class="guide" d="M310 2v324M19 115h582M19 314h582m-569-302h17m-9-8v17m531-9h17m-8-8v17m-548 297h17m-9-8v17m531-9h17m-8-8v17" stroke-dasharray="3 4"/>
             <g filter="url(#ink-roughen)">
-              <path class="pen paper-fill" d="M121 20q197-3 378 0l-2 50q-181 2-376 0z"/>
-              <path class="hatching" d="M122 21h60v48h-60zm315 0h60v48h-60z"/>
-              <path class="pen" marker-end="url(#arrow-ink)" d="M290 71q-5 20-53 20-75 0-75 29"/>
-              <path class="blue" marker-end="url(#arrow-blue)" d="M330 71q5 20 53 20 75 0 75 29"/>
-              <path class="pen paper-fill" d="M31 124q98-4 262-2l-2 130q-149 3-260 0z"/>
-              <path class="blue paper-fill" d="M327 124q125-3 262-2l-1 130q-121 3-261 0z"/>
-              <path class="pen fine" d="M37 130q114-4 250-2l-2 118q-126 3-248 0z"/>
-              <path class="blue fine" d="M333 130q124-3 250-2l-1 118q-116 3-249 0z"/>
-              <path class="pen fine" d="M55 167v69m0-46h16m-16 21h16m-16 25h16"/>
-              <path class="blue fine" d="M350 167v69m0-46h16m-16 21h16m-16 25h16"/>
+              <path class="pen paper-fill" d="M75 20q245-3 470 0l-2 90q-225 2-468 0z"/>
+              <path class="hatching" d="M76 21h68v48H76zm400 0h67v48h-67z"/>
+              <path class="pen fine" d="M87 78q213 2 446 0"/>
+              <g transform="translate(0 40)">
+                <path class="pen" marker-end="url(#arrow-ink)" d="M290 71q-5 20-53 20-75 0-75 29"/>
+                <path class="blue" marker-end="url(#arrow-blue)" d="M330 71q5 20 53 20 75 0 75 29"/>
+                <path class="pen paper-fill" d="M31 124q98-4 262-2l-2 144q-149 3-260 0z"/>
+                <path class="blue paper-fill" d="M327 124q125-3 262-2l-1 144q-121 3-261 0z"/>
+                <path class="pen fine" d="M37 130q114-4 250-2l-2 132q-126 3-248 0z"/>
+                <path class="blue fine" d="M333 130q124-3 250-2l-1 132q-116 3-249 0z"/>
+                <path class="pen fine" d="M55 168v78m0-48h16m-16 24h16m-16 24h16"/>
+                <path class="blue fine" d="M350 168v78m0-48h16m-16 24h16m-16 24h16"/>
+              </g>
             </g>
             <g text-anchor="middle">
-              <text class="label" x="310" y="46">运行状态目录</text>
-              <text class="type" x="310" y="63">~/.gemini/codex-castor/</text>
-              <text class="label" x="162" y="154">任务记录</text>
-              <text class="label blue-text" x="458" y="154">独立 Git worktree</text>
+              <text class="label" x="310" y="44">运行状态目录</text>
+              <text class="type" x="310" y="69">~/.gemini/codex-castor/</text>
+              <text class="type" x="160" y="99">telemetry.jsonl</text>
+              <text class="type" x="310" y="99">telemetry.csv</text>
+              <text class="type" x="460" y="99">report.md</text>
+              <text class="label" x="162" y="194">任务记录</text>
+              <text class="label blue-text" x="458" y="194">独立 Git worktree</text>
             </g>
             <g class="type">
-              <text x="77" y="178">tasks/&lt;task_id&gt;/</text>
-              <text x="77" y="196">spec.md / meta.json</text>
-              <text x="77" y="217">events-r1.jsonl</text>
-              <text x="77" y="241">report-r1.json</text>
-              <text class="blue-text" x="372" y="178">worktrees/&lt;task_id&gt;/</text>
-              <text class="blue-text" x="372" y="196">codex/&lt;task_id&gt;</text>
-              <text class="blue-text" x="372" y="217">base_ref · 默认 HEAD</text>
-              <text class="blue-text" x="372" y="241">独立工作目录与分支</text>
+              <text x="77" y="220">tasks/&lt;task_id&gt;/</text>
+              <text x="77" y="244">spec.md / meta.json</text>
+              <text x="77" y="268">events-r1.jsonl</text>
+              <text x="77" y="292">report-r1.json</text>
+              <text class="blue-text" x="372" y="220">worktrees/&lt;task_id&gt;/</text>
+              <text class="blue-text" x="372" y="244">codex/&lt;task_id&gt;</text>
+              <text class="blue-text" x="372" y="268">base_ref · 默认 HEAD</text>
+              <text class="blue-text" x="372" y="292">独立工作目录与分支</text>
             </g>
           </svg>
-          <figcaption>每轮运行同时保留 <code>stderr-r1.log</code>；若验收后需要返工，会按轮次继续生成 <code>feedback-r2.md</code>、<code>events-r2.jsonl</code> 与 <code>report-r2.json</code>。可通过 <code>CODEX_CASTOR_STATE_DIR</code> 自定义状态目录，通过 <code>CODEX_BIN</code> 指定本地 Codex 可执行文件。</figcaption>
+          <figcaption>根目录下的导出文件汇集配置的实际表现与用户提出的改进意见。失败任务保留在记录中，汇总统计会排除这些任务。任务记录还保留 <code>stderr-r1.log</code>，以及返工开始后生成的 <code>feedback-r2.md</code> 和第二轮文件。用 <code>CODEX_CASTOR_STATE_DIR</code> 指定状态目录，用 <code>CODEX_BIN</code> 指定本地 Codex 可执行文件。</figcaption>
         </figure>
         <div class="catalog">
-          <article><h3>MCP 服务与报告 Schema</h3><p>服务端从 rollout 日志实时读取模型与推理强度，把活动写入 <code>meta.json</code>，并按客户端设置发送 MCP 进度与日志通知。报告 Schema 定义六项交付字段。Antigravity App 通过 <code>ui://codex-castor/monitor.html</code> 打开看板。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/server.py"><code>mcp/server.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/report.schema.json"><code>mcp/report.schema.json</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/monitor.html"><code>mcp/monitor.html</code></a></div></article>
-          <article><h3>编排技能</h3><p>约束架构师撰写自洽规格、异步派发、独立验收与返工的标准操作流程。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/skills/codex-orchestrator/SKILL.md"><code>skills/codex-orchestrator/SKILL.md</code></a></div></article>
-          <article><h3>全局协议与配置模板</h3><p>Antigravity 的角色分工规则、MCP 注册配置以及各工具的后台运行模式。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/config/GEMINI.md"><code>config/GEMINI.md</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/config/mcp_config.example.json"><code>config/mcp_config.example.json</code></a></div></article>
-          <article><h3>安装器、诊断与测试</h3><p>安装、卸载、MCP 握手诊断和单元测试。终端看板可跟踪实时事件（<code>--follow</code>），Antigravity CLI 状态栏可显示运行中的任务。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.py"><code>scripts/install.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.sh"><code>scripts/install.sh</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/doctor.py"><code>scripts/doctor.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/watch.py"><code>scripts/watch.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/statusline.py"><code>scripts/statusline.py</code></a> <a href="https://github.com/JAY201368/codex-castor/tree/main/tests/"><code>tests/</code></a></div></article>
+          <article><h3>MCP 服务与报告 Schema</h3><p>服务端从 rollout 日志读取实际使用的模型与推理强度，把活动写入 <code>meta.json</code>，按客户端设置发送 MCP 进度与日志通知，并提取简明的失败原因。运行指标模块对写入加锁，同步 JSONL、CSV 与 Markdown 导出文件。汇总统计排除失败任务。报告 Schema 定义六项交付字段。资源地址为 <code>ui://codex-castor/monitor.html</code> 的 MCP App 提供任务和分析视图，可在任务卡片内填写反馈。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/server.py"><code>mcp/server.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/report.schema.json"><code>mcp/report.schema.json</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/telemetry.py"><code>mcp/telemetry.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/mcp/monitor.html"><code>mcp/monitor.html</code></a></div></article>
+          <article><h3>编排技能</h3><p>架构师按流程撰写自洽规格并独立验收。从 <code>~/.codex/models_cache.json</code> 查询当前模型，并显式传入 <code>model</code> 和 <code>reasoning_effort</code>。验收时汇报运行指标，每次汇报一轮结果后自动记录用户首条回复。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/skills/codex-orchestrator/SKILL.md"><code>skills/codex-orchestrator/SKILL.md</code></a></div></article>
+          <article><h3>全局协议与配置模板</h3><p>角色分工、MCP 注册及七项工具的后台运行设置。派发或续接时，<code>toolSummary</code> 以 <code>[&lt;model&gt;·&lt;effort&gt;]</code> 开头。用 <code>codex_feedback</code> 记录用户的首条回复。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/config/GEMINI.md"><code>config/GEMINI.md</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/config/mcp_config.example.json"><code>config/mcp_config.example.json</code></a></div></article>
+          <article><h3>安装器、诊断与测试</h3><p>安装器和 Doctor 均覆盖运行指标模块与分析工具，Doctor 还会验证 MCP 握手。运行 <code>python3 scripts/analytics.py summary</code> 查看汇总数据及近期任务，可用 <code>--model</code>、<code>--effort</code>、<code>--project</code> 或 <code>--since</code> 筛选。用 <code>backfill</code> 重建账本、<code>feedback</code> 记录评估或首条回复、<code>export</code> 导出 Markdown 或 CSV。也可运行测试、用 <code>--follow</code> 在终端跟踪事件，或在 Antigravity CLI 状态栏查看运行中的任务。</p><div class="catalog-links"><a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.py"><code>scripts/install.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/install.sh"><code>scripts/install.sh</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/doctor.py"><code>scripts/doctor.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/analytics.py"><code>scripts/analytics.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/watch.py"><code>scripts/watch.py</code></a> <a href="https://github.com/JAY201368/codex-castor/blob/main/scripts/statusline.py"><code>scripts/statusline.py</code></a> <a href="https://github.com/JAY201368/codex-castor/tree/main/tests/"><code>tests/</code></a></div></article>
         </div>
       </section>
 
