@@ -71,7 +71,6 @@ svg { flex: none; vertical-align: middle; }
 .running, .starting, .info { color: var(--accent); background-color: var(--wash); }
 .completed, .saved { color: var(--success); background-color: var(--good); }
 .failed, .error { color: var(--danger); background-color: var(--bad); }
-.override { color: var(--warning); background: var(--warm); }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 100%; background: var(--muted); flex: none; }
 .dot.running, .dot.starting { background: var(--accent); animation: pulse 2s ease-in-out infinite; }
 .dot.completed { background: var(--success); } .dot.failed { background: var(--danger); }
@@ -92,8 +91,8 @@ svg { flex: none; vertical-align: middle; }
 .section-head .row { gap: 7px; }
 .card-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .task-card, .panel, .kpis > div, .empty { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; }
-.task-card { min-width: 0; height: 272px; padding: 14px 15px; display: grid;
-  grid-template-rows: 38px 22px 38px 34px minmax(0, 1fr); gap: 8px; cursor: pointer;
+.task-card { min-width: 0; height: 302px; padding: 14px 15px; display: grid;
+  grid-template-rows: 38px 22px 22px 38px 34px minmax(0, 1fr); gap: 8px; cursor: pointer;
   transition: border-color .16s, box-shadow .16s; }
 .task-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 4px 12px #0000000d; }
 .title-row { align-items: start; min-width: 0; gap: 7px; }
@@ -103,6 +102,8 @@ svg { flex: none; vertical-align: middle; }
 .card-meta, .card-meta > span { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .card-meta { gap: 10px; white-space: nowrap; color: var(--secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .card-meta .project-meta { flex: 1; }
+.card-model { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.card-model .model-pill { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .project-meta span, .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-group + .project-group { margin-top: 8px; }
 .project-toggle { width: 100%; display: flex; align-items: center; gap: 8px; padding: 11px 12px;
@@ -764,6 +765,23 @@ function cardMetadata(task) {
   metric("clock", live(task) ? "Elapsed time" : "Duration", live(task) ? clockFor(task, seconds) : readableDuration(seconds));
   return strip;
 }
+function cardModel(task) {
+  const row = node("div", "card-model");
+  const model = task.effective_model || task.model;
+  const effort = task.effective_reasoning_effort || task.reasoning_effort;
+  if (model) {
+    const pill = node("span", "pill mono model-pill", model);
+    pill.title = "Model: " + model;
+    row.append(pill);
+  }
+  if (effort) {
+    const pill = node("span", "pill", effort);
+    pill.title = "Reasoning effort: " + effort;
+    row.append(pill);
+  }
+  if (!row.childElementCount) row.append(node("span", "muted", "Model —"));
+  return row;
+}
 function taskCard(task, card) {
   const id = task.task_id;
   if (!card) {
@@ -794,7 +812,7 @@ function taskCard(task, card) {
   strip.append(icon(activityIcons[activity.kind] || "clock", 13), node("span", "activity-text", activity.text),
     node("span", "pill " + task.status, chip));
   while (card.childElementCount > 1) card.firstElementChild.remove();
-  card.prepend(header, cardMetadata(task), node("p", "preview-text", task.prompt_preview || task.task_summary || "No prompt recorded."), strip);
+  card.prepend(header, cardMetadata(task), cardModel(task), node("p", "preview-text", task.prompt_preview || task.task_summary || "No prompt recorded."), strip);
   return card;
 }
 function groupTitle(name, count) {
@@ -808,7 +826,8 @@ function renderCards(grid, members) {
     let card = cards.get(task.task_id);
     cards.delete(task.task_id);
     const key = JSON.stringify([task.task_title, task.prompt_preview, task.task_summary, task.status,
-      task.round, task.latest_activity, projectName(task), taskTokens(task), !live(task) && cardSeconds(task)]);
+      task.round, task.latest_activity, projectName(task), task.effective_model || task.model,
+      task.effective_reasoning_effort || task.reasoning_effort, taskTokens(task), !live(task) && cardSeconds(task)]);
     if (!card || card.renderKey !== key) {
       card = taskCard(task, card);
       card.renderKey = key;
@@ -1001,10 +1020,8 @@ function configuration(c) {
   function sourced(field) {
     const row = node("div", "chips");
     const value = c["effective_" + field] || c[field];
-    const configured = c["config_" + field];
     row.append(value || "—");
     if (c[field + "_source"]) row.append(node("span", "pill", sourceLabel(c[field + "_source"])));
-    if (configured && configured !== value) row.append(node("span", "pill override", "Override · config " + configured));
     return row;
   }
   pair("Task ID", c.task_id, "mono"); pair("Session ID", c.session_id, "mono");

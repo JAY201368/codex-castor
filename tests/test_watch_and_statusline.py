@@ -427,11 +427,13 @@ class MonitorTests(unittest.TestCase):
                       "count > 0 || live(selectedTask()) ? 1000 : 8000", "setInterval(tick, 1000)",
                       "{limit: 0, task_id: selected, include_detail: true}", "{limit: 200}",
                       "task.finished_at || task.updated_at || task.created_at",
-                      'new Option("Undecided", "")'):
+                      'new Option("Undecided", "")',
+                      "cardModel(task)"):
             with self.subTest(token=token):
                 self.assertIn(token, script)
         self.assertNotIn('new Option("Verdict", "")', script)
         self.assertNotIn("Show full prompt", self.html)
+        self.assertNotIn("Override · config ", self.html)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for JavaScript syntax verification")
     def test_inline_javascript_syntax(self):
