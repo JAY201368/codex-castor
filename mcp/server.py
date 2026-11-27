@@ -460,6 +460,62 @@ def compact_text(value: Any, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_TRACING_PREFIX = re.compile(
+    r"^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})? )?"
+    r"(?:ERROR|WARN|INFO|FATAL) (?:[\w.-]+(?:::[\w.-]+)*: )?"
+)
+_SEVERITY_PREFIX = re.compile(r"^(?:(?:error|fatal):\s*)+", re.IGNORECASE)
+_REPEATED_ERROR_PREFIX = re.compile(r"^(\S+): (?=\1(?= |:|$))", re.IGNORECASE)
+_FULL_UUID = re.compile(r"\b([0-9a-fA-F]{8})-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+_STDERR_TOP_LEVEL_ERROR = re.compile(r"^(?:(?i:error|fatal|panic):|[A-Za-z_][\w.]*(?:Error|Exception):\s*\S)")
+_STDERR_LOG_ERROR = re.compile(r" ERROR |^ERROR:")
+_STDERR_FRAME = re.compile(r'^(?:File "|Traceback \(most recent call last\):|at |[\^~\-=|\s]+$)')
+
+
+def clean_error_summary(message: str, limit: int = 160) -> str:
+    text = " ".join(_ANSI_ESCAPE.sub("", message).split())
+    text = _TRACING_PREFIX.sub("", text)
+    text = _SEVERITY_PREFIX.sub("", text)
+    text = _REPEATED_ERROR_PREFIX.sub("", text)
+    return compact_text(_FULL_UUID.sub(r"\1", text), limit)
+
+
+def _failure_reason(message: str) -> str:
+    raw = message.strip().removeprefix("⚠").lstrip("\ufe0f ")
+    if noisy_warning(raw):
+        return ""
+    summary = clean_error_summary(raw)
+    return "" if re.fullmatch(r"turn\.failed|thread\.[\w.]*", summary) else summary
+
+
+def _extract_stderr_error_summary(stderr_path: Path, limit: int = 160) -> str:
+    tail_bytes = 16 * 1024
+    try:
+        if not stderr_path.is_file():
+            return ""
+        with stderr_path.open("rb") as stream:
+            stream.seek(max(0, stream.seek(0, os.SEEK_END) - tail_bytes))
+            tail = stream.read(tail_bytes).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    lines = []
+    for line in tail.splitlines():
+        line = _ANSI_ESCAPE.sub("", line).strip()
+        if line and not noisy_warning(line):
+            lines.append(line)
+    informative = [line for line in reversed(lines) if not _STDERR_FRAME.match(line)]
+    for pattern in (_STDERR_TOP_LEVEL_ERROR, _STDERR_LOG_ERROR):
+        for line in informative:
+            if pattern.search(line) and (summary := clean_error_summary(line, limit)):
+                return summary
+    for line in informative or reversed(lines):
+        if summary := clean_error_summary(line, limit):
+            return summary
+    return ""
+
+
 def clean_shell_command(cmd: str, *, full: bool = False) -> str:
     if re.match(r"^\s*(?:/bin/)?(?:zsh|bash|sh)\s+-l?c\s", cmd):
         try:
@@ -484,6 +540,12 @@ def _extract_report_summary(raw_text_or_path):
     return ""
 
 
+def _turn_failure_message(ev: Dict[str, Any]) -> str:
+    error = ev.get("error")
+    message = error.get("message") if isinstance(error, dict) else error
+    return str(message or ev.get("message") or "").strip()
+
+
 def summarize_event(ev: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     ev_type = ev.get("type", "")
     if ev_type == "thread.started":
@@ -491,8 +553,11 @@ def summarize_event(ev: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     if ev_type in ("turn.started", "turn.completed"):
         return "turn", ev_type
     if ev_type == "turn.failed":
+        message = _turn_failure_message(ev)
+        if not noisy_warning(message) and (summary := clean_error_summary(message, 140)):
+            return "error", f"⚠ {summary}"
         return "error", ev_type
-    if ev_type == "error" and "is ignoring" not in str(ev.get("message", "")):
+    if ev_type == "error" and not noisy_warning(str(ev.get("message", ""))):
         return "error", f"⚠ {compact_text(ev.get('message'), 140)}"
     item = ev.get("item")
     if ev_type not in ("item.started", "item.completed") or not isinstance(item, dict):
@@ -524,7 +589,7 @@ def summarize_event(ev: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         return "message", f"💬 {compact_text(item.get('text'))}"
     elif kind == "error":
         message = str(item.get("message") or "")
-        if "is ignoring" not in message and "--dangerously-bypass-hook-trust" not in message:
+        if not noisy_warning(message):
             return "error", f"⚠ {compact_text(message, 140)}"
     return None
 
@@ -618,6 +683,7 @@ def execute_codex_round(
             "current_activity": "launching",
             "recent_activities": [],
             "exit_code": None,
+            "error_summary": None,
             "pid": None,
             "usage": None,
             "_turn_usage_reported": False,
@@ -693,12 +759,10 @@ def execute_codex_round(
                         meta["usage"] = ev["usage"]
                         meta["_turn_usage_reported"] = True
                     elif ev_type == "turn.failed":
-                        err_obj = ev.get("error")
-                        message = err_obj.get("message") if isinstance(err_obj, dict) else err_obj
-                        fatal_errors.append(str(message or ev.get("message") or "turn.failed"))
+                        fatal_errors.append(_turn_failure_message(ev) or "turn.failed")
                     elif ev_type == "error":
-                        msg = str(ev.get("message", ""))
-                        if msg and "is ignoring" not in msg:
+                        msg = str(ev.get("message") or "").strip()
+                        if msg and not noisy_warning(msg):
                             fatal_errors.append(msg)
                     elif ev_type == "item.completed":
                         item = ev.get("item")
@@ -755,11 +819,20 @@ def execute_codex_round(
     else:
         final_status = "failed"
 
+    error_summary = ""
+    if final_status == "failed":
+        for message in reversed(fatal_errors):
+            if error_summary := _failure_reason(message):
+                break
+        if not error_summary:
+            error_summary = _extract_stderr_error_summary(stderr_path)
+
     finished_at = utc_now_iso()
     meta.update(
         status=final_status, exit_code=exit_code, pid=None, event_count=event_count,
         duration_seconds=duration, current_activity=f"{final_status} ({duration}s)",
         updated_at=finished_at, finished_at=finished_at,
+        error_summary=error_summary or None,
     )
     meta.pop("_rollout_round_start", None)
     kind = "dispatch" if prompt_file.name == "spec.md" else "resume"
@@ -1079,6 +1152,20 @@ def primary_prompt(task_dir):
     return resume if not spec.is_file() and resume.is_file() else spec
 
 
+def _failed_round_stderr_summary(meta, task_dir: Path) -> str:
+    stderr_path = task_dir / f"stderr-r{meta.get('round') or 1}.log"
+    try:
+        recorded_path = nonempty_string(meta.get("current_stderr_file"))
+        if not stderr_path.is_file() and recorded_path:
+            stderr_path = Path(recorded_path)
+        stderr_path = stderr_path.resolve()
+        if stderr_path.is_relative_to(task_dir.resolve()):
+            return _extract_stderr_error_summary(stderr_path)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return ""
+
+
 def latest_activity(meta, task_dir, alive, status):
     if not alive and status == "completed":
         report = _extract_report_summary(task_dir / f"report-r{meta.get('round') or 1}.json")
@@ -1087,6 +1174,16 @@ def latest_activity(meta, task_dir, alive, status):
     prefixes = {"▶": "command", "✓": "command", "✗": "command", "✎": "file", "💬": "message",
                 "🔎": "search", "⚙": "tool", "💭": "thinking", "⚠": "error"}
     recent = list(reversed(meta.get("recent_activities") or []))
+    if not alive and status == "failed":
+        recorded = meta.get("error_summary")
+        if isinstance(recorded, str) and (reason := _failure_reason(recorded)):
+            return {"kind": "error", "text": reason}
+        for entry in recent:
+            raw = str(entry.get("text") or "").strip()
+            if (entry.get("kind") == "error" or raw.startswith("⚠")) and (reason := _failure_reason(raw)):
+                return {"kind": "error", "text": reason}
+        if reason := _failed_round_stderr_summary(meta, task_dir):
+            return {"kind": "error", "text": reason}
     current = meta.get("current_activity") or meta.get("last_event")
     fallback_kind = "error" if status == "failed" else "status"
     if current:
@@ -1109,8 +1206,9 @@ def latest_activity(meta, task_dir, alive, status):
         if raw.startswith("{"):
             # Older metadata can contain a JSON prefix cut off by compact_text.
             raw = _extract_report_summary(raw) or "Assistant report"
-        if kind == "error" and noisy_warning(raw):
-            continue
+        if kind == "error":
+            if noisy_warning(raw) or (not alive and status == "failed" and not _failure_reason(raw)):
+                continue
         return {"kind": kind if kind in prefixes.values() else "status", "text": compact_text(raw, 160)}
     return {"kind": fallback_kind, "text": str(status or "Idle")}
 
@@ -1146,7 +1244,7 @@ def build_task_summary(
     fields = (
         "round", "session_id", "worktree", "model", "reasoning_effort", *MODEL_RESULT_FIELDS,
         "last_event", "event_count", "created_at", "round_started_at", "updated_at", "finished_at",
-        "usage", "exit_code",
+        "usage", "exit_code", "error_summary",
     )
     return {
         **{field: meta.get(field) for field in fields},

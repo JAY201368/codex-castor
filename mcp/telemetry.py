@@ -543,8 +543,13 @@ def metrics(records: list) -> dict:
     }
 
 
+def is_counted_in_analytics(record: dict) -> bool:
+    return record.get("status") != "failed"
+
+
 def compute_analytics(records, *, model=None, effort=None, project=None, since=None) -> dict:
     records = filter_records(records, model=model, effort=effort, project=project, since=since)
+    records = [item for item in records if is_counted_in_analytics(item)]
     groups = {}
     for item in records:
         key = (item.get("model") or "unknown", item.get("reasoning_effort") or "unknown")

@@ -195,22 +195,29 @@ class LedgerTests(unittest.TestCase):
             {"model": "sol", "reasoning_effort": "medium", "project": "repo", "created_at": "2026-11-01T12:00:00Z",
              "status": "completed", "total_duration_seconds": 0, "total_usage": {"total_tokens": 0},
              "feedback": {"rating": 2, "verdict": "partial"}},
-            {"model": "astra", "reasoning_effort": "high", "status": "failed", "rework_count": 2},
+            {"model": "astra", "reasoning_effort": "high", "status": "failed", "rework_count": 2,
+             "total_duration_seconds": 30, "total_usage": {"total_tokens": 100, "input_tokens": 70},
+             "feedback": {"rating": 1, "verdict": "rejected"}},
             {"status": "cancelled"},
         ]
         result = telemetry.compute_analytics(records)
         overall = result["overall"]
         fields = {
-            "task_count": 4, "completed_count": 2, "failed_count": 1, "cancelled_count": 1,
-            "completion_rate": 0.5, "total_reworks": 3, "rework_task_count": 2, "rework_rate": 0.5,
+            "task_count": 3, "completed_count": 2, "failed_count": 0, "cancelled_count": 1,
+            "completion_rate": 2 / 3, "total_reworks": 1, "rework_task_count": 1, "rework_rate": 1 / 3,
             "first_pass_rate": 0.5, "total_duration_seconds": 10, "avg_duration_seconds": 5,
-            "total_tokens": 16, "avg_total_tokens": 8, "rated_count": 2, "avg_rating": 3,
+            "total_tokens": 16, "total_input_tokens": 0, "avg_total_tokens": 8, "rated_count": 2, "avg_rating": 3,
         }
         for field, value in fields.items():
             self.assertEqual(overall[field], value, field)
-        self.assertEqual(overall["verdict_counts"]["accepted"], 1)
-        self.assertEqual([row["model"] for row in result["by_model_effort"]], ["sol", "astra", "unknown"])
+        self.assertEqual(overall["verdict_counts"], {
+            "accepted": 1, "rework": 0, "partial": 1, "rejected": 0, "abandoned": 0,
+        })
+        self.assertEqual([row["model"] for row in result["by_model_effort"]], ["sol", "unknown"])
         self.assertEqual(result["by_model_effort"][0]["avg_reworks"], 0.5)
+        failed_only = telemetry.compute_analytics(records, model="astra")
+        self.assertEqual(failed_only["overall"]["task_count"], 0)
+        self.assertEqual(failed_only["by_model_effort"], [])
         match = telemetry.compute_analytics(records, model="sol", effort="medium", project="repo", since="2026-11-02")
         self.assertEqual(match["overall"]["task_count"], 1)
         self.assertEqual(match["overall"]["avg_rating"], 4)
@@ -382,6 +389,43 @@ class McpTelemetryTests(test_server.ServerHarness):
             self.assertEqual(records[key]["rounds"][0]["status"], status)
             self.assertIsNone(records[key]["total_usage"])
             self.assertFalse(records[key]["duration_estimated"])
+
+    def test_failed_task_stays_in_monitor_and_exports_without_affecting_analytics(self):
+        write_history(self.state)
+        telemetry.backfill(self.state)
+        baseline, _ = self.monitor()
+        self.assertEqual(baseline["analytics"]["overall"]["task_count"], 1)
+        self.assertEqual(len(baseline["analytics"]["by_model_effort"]), 1)
+
+        task_id = "failed-rework"
+        write_history(self.state, task_id, created="2026-11-02T12:00:00Z", status="failed", exit_code=1)
+        self.call("codex_feedback", task_id=task_id, rating=1, verdict="rejected")
+
+        record = self.ledger()[task_id]
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["rework_count"], 1)
+        self.assertGreater(record["total_duration_seconds"], 0)
+        self.assertEqual(record["total_usage"]["total_tokens"], 190)
+        self.assertEqual(record["feedback"]["rating"], 1)
+        self.assertEqual(record["feedback"]["verdict"], "rejected")
+        with (self.state / "telemetry.csv").open(encoding="utf-8", newline="") as stream:
+            rows = {row["task_id"]: row for row in csv.DictReader(stream)}
+        self.assertEqual(rows[task_id]["status"], "failed")
+        self.assertEqual(rows[task_id]["total_tokens"], "190")
+
+        monitor, _ = self.monitor()
+        task = next(task for task in monitor["tasks"] if task["task_id"] == task_id)
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(monitor["analytics"], baseline["analytics"])
+
+        report = (self.state / "report.md").read_text(encoding="utf-8")
+        self.assertIn(f"| {task_id} |", report.split("## Recent Tasks Log", 1)[1])
+        result = subprocess.run([sys.executable, str(CLI), "summary", "--json"],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = json.loads(result.stdout)
+        self.assertEqual(summary["recent_tasks"][0]["task_id"], task_id)
+        self.assertEqual(summary["recent_tasks"][0]["status"], "failed")
 
     def test_repeated_session_only_resume_keeps_first_round(self):
         first = self.call("codex_resume", session_id=test_server.SESSION, workdir=str(self.root), feedback="External work")

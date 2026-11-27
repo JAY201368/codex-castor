@@ -1522,7 +1522,7 @@ window.addEventListener("message", event => {
 });
 
 function demoAnalytics(sample) {
-  const settled = sample.filter(task => !live(task));
+  const settled = sample.filter(task => !live(task) && task.status !== "failed");
   const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   const rates = (numerator, denominator) => denominator ? numerator / denominator : 0;
   const groupStats = tasks => ({

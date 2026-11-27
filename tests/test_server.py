@@ -74,6 +74,17 @@ elif prompt == "activity-burst":
     event("item.completed", item={"type": "command_execution", "command": "/bin/bash -lc 'git status'",
                                   "exit_code": 1})
     event("item.completed", item={"type": "error", "message": "notice about --dangerously-bypass-hook-trust"})
+elif prompt == "fail-turn":
+    event("turn.failed", error={"message": "Error: request rejected for thread " + session})
+    event("turn.failed")
+    event("error", message="Codex is ignoring a hook")
+    event("error", message="notice about --dangerously-bypass-hook-trust")
+    print("Error: stderr fallback", file=sys.stderr)
+    sys.exit(0)
+elif prompt == "fail-stderr":
+    raise ValueError("invalid session configuration")
+elif prompt == "recover from failure":
+    event("error", message="notice about --dangerously-bypass-hook-trust")
 
 if args[1] == "resume":
     assert args[-2] == session, args
@@ -102,6 +113,13 @@ else:
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_server():
+    spec = importlib.util.spec_from_file_location("castor_server", SERVER)
+    server = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(server)
+    return server
 
 
 class ServerHarness(unittest.TestCase):
@@ -268,6 +286,115 @@ class ServerHarness(unittest.TestCase):
 
 
 class ServerTests(ServerHarness):
+    def record_failed_task(self, task_id, round_num=1, **metadata):
+        task = self.state / "tasks" / task_id
+        task.mkdir(parents=True)
+        (task / "meta.json").write_text(json.dumps({
+            "task_id": task_id, "round": round_num, "status": "failed", "duration_seconds": 8.75,
+            "current_activity": "failed (8.75s)", "recent_activities": [], **metadata,
+        }))
+        (task / f"events-r{round_num}.jsonl").touch()
+        return task
+
+    def test_historical_failure_prefers_user_facing_stderr_error(self):
+        task = self.record_failed_task("historical-failure", round_num=3)
+        (task / "stderr-r3.log").write_text(
+            "2026-11-24T14:14:54.709056Z ERROR codex_core::session::session: failed to initialize thread "
+            "persistence: thread-store conflict: thread 01a20dd4-131d-7ae2-9d6d-3ed7bb1e5268 already has an active writer\n"
+            "2026-11-24T14:14:54.711884Z ERROR codex_core::session: Failed to create session: thread-store conflict: "
+            "thread 01a20dd4-131d-7ae2-9d6d-3ed7bb1e5268 already has an active writer\n"
+            "2026-11-24T14:14:54.857020Z ERROR codex_models_manager::manager: failed to refresh available models: "
+            "request timed out\n"
+            "Error: thread/resume: thread/resume failed: thread 01a20dd4-131d-7ae2-9d6d-3ed7bb1e5268 "
+            "already has an active writer (code -32600)\n"
+        )
+        expected = {"kind": "error", "text": "thread/resume failed: thread 01a20dd4 already has an active writer (code -32600)"}
+        self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"], expected)
+        self.assertEqual(self.call("codex_status", task_id=task.name)["latest_activity"], expected)
+        self.assertNotIn("error_summary", read_json(task / "meta.json"))
+
+    def test_failed_task_prefers_stderr_exception_over_command(self):
+        task = self.record_failed_task(
+            "traceback-failure", recent_activities=[{"kind": "cmd_done", "text": "✓ git status"}],
+        )
+        (task / "stderr-r1.log").write_text(
+            'Traceback (most recent call last):\n  File "runner.py", line 3, in <module>\n'
+            '    raise ValueError("invalid settings")\n    ^~~~~\nValueError: invalid settings\n'
+            '    at launcher (index.js:5:1)\nError: Codex is ignoring a hook\n'
+        )
+        activity = self.monitor()[0]["tasks"][0]["latest_activity"]
+        self.assertEqual(activity, {"kind": "error", "text": "ValueError: invalid settings"})
+
+    def test_failed_task_uses_only_valid_recorded_stderr_path(self):
+        task_id = "recorded-stderr"
+        recorded_path = self.state / "tasks" / task_id / "legacy-stderr.log"
+        self.record_failed_task(task_id, current_stderr_file=str(recorded_path))
+        recorded_path.write_text(
+            "\x1b[31m2026-11-24T14:14:54.709056Z ERROR codex_core::session:\x1b[0m unable to open session\n"
+            "2026-11-24T14:14:55Z WARN codex_core::session: shutdown in progress\n"
+        )
+        self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"],
+                         {"kind": "error", "text": "unable to open session"})
+
+        recorded_path.unlink()
+        outside = self.root / "unrelated.log"
+        outside.write_text("Error: unrelated failure\n")
+        recorded_path.symlink_to(outside)
+        self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"],
+                         {"kind": "error", "text": "failed (8.75s)"})
+
+    def test_failed_task_without_error_reason_keeps_status_fallback(self):
+        task = self.record_failed_task(
+            "missing-reason",
+            recent_activities=[{"kind": "error", "text": "turn.failed"},
+                               {"text": "⚠ thread.started"},
+                               {"kind": "error", "text": "⚠ notice about --dangerously-bypass-hook-trust"}],
+        )
+        for stderr_exists in (False, True):
+            with self.subTest(stderr_exists=stderr_exists):
+                if stderr_exists:
+                    (task / "stderr-r1.log").touch()
+                activity = self.call("codex_status")["tasks"][0]["latest_activity"]
+                self.assertEqual(activity, {"kind": "error", "text": "failed (8.75s)"})
+
+    def test_failed_dispatch_persists_turn_reason_and_successful_resume_clears_it(self):
+        task_id = "turn-failure"
+        task = self.state / "tasks" / task_id
+        result = self.call("codex_dispatch", error=True, task_id=task_id, workdir=str(self.root), spec="fail-turn")
+        expected = "request rejected for thread 01234567"
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(read_json(task / "meta.json")["error_summary"], expected)
+        status = self.call("codex_status", task_id=task_id)
+        self.assertEqual(status["error_summary"], expected)
+        self.assertEqual(status["latest_activity"], {"kind": "error", "text": expected})
+        self.assertIn(f"⚠ {expected}", status["recent_events"])
+
+        result = self.call("codex_resume", task_id=task_id, feedback="recover from failure")
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(read_json(task / "meta.json")["error_summary"])
+        status = self.call("codex_status", task_id=task_id)
+        self.assertIsNone(status["error_summary"])
+        self.assertEqual(status["latest_activity"]["kind"], "report")
+
+    def test_failed_dispatch_persists_stderr_reason(self):
+        task_id = "stderr-failure"
+        result = self.call("codex_dispatch", error=True, task_id=task_id, workdir=str(self.root), spec="fail-stderr")
+        self.assertEqual(result["status"], "failed")
+        meta = read_json(self.state / "tasks" / task_id / "meta.json")
+        self.assertEqual(meta["error_summary"], "ValueError: invalid session configuration")
+
+    def test_launch_oserror_is_persisted_and_surfaced(self):
+        Path(self.env["CODEX_BIN"]).write_text("invalid executable format\n")
+        task_id = "launch-failure"
+        result = self.call("codex_dispatch", error=True, task_id=task_id, workdir=str(self.root), spec="launch")
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["exit_code"])
+        meta = read_json(self.state / "tasks" / task_id / "meta.json")
+        self.assertTrue(meta["error_summary"].startswith("[Errno 8]"), meta["error_summary"])
+        self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"],
+                         {"kind": "error", "text": meta["error_summary"]})
+
     def test_json_rpc_protocol(self):
         initialized = self.receive(self.send("initialize", {"protocolVersion": "2025-03-26"}))
         self.assertEqual(initialized["result"]["serverInfo"], {"name": "codex-castor", "version": "1.1.0"})
@@ -814,11 +941,44 @@ class ServerTests(ServerHarness):
         self.assertIn("already exists", self.call("codex_dispatch", error=True, **arguments)["error"])
 
 
+class FailureSummaryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = load_server()
+
+    def test_clean_error_summary_formats_and_truncates(self):
+        message = "\x1b[31mError: error: fatal: Thread/Resume: thread/resume failed:\x1b[0m\n  " + SESSION
+        self.assertEqual(self.server.clean_error_summary(message), "thread/resume failed: 01234567")
+        self.assertEqual(self.server.clean_error_summary(message, 14), "thread/resume…")
+
+    def test_turn_failed_activity_uses_event_message(self):
+        event = {"type": "turn.failed", "error": {"message": "Error: connection lost"}}
+        kind, text = self.server.summarize_event(event)
+        self.assertEqual((kind, text), ("error", "⚠ connection lost"))
+        meta = {
+            "recent_activities": [
+                {"kind": kind, "text": text},
+                {"kind": "error", "text": "turn.failed"},
+                {"kind": "cmd_done", "text": "✓ git status"},
+            ],
+        }
+        activity = self.server.latest_activity(meta, SERVER.parent, False, "failed")
+        self.assertEqual(activity, {"kind": "error", "text": "connection lost"})
+        event = {"type": "turn.failed", "error": {}, "message": "fallback event message"}
+        self.assertEqual(self.server.summarize_event(event), ("error", "⚠ fallback event message"))
+
+    def test_warning_events_are_excluded_from_error_activity(self):
+        for message in ("Codex is ignoring a hook", "notice about --dangerously-bypass-hook-trust"):
+            with self.subTest(message=message):
+                error_event = {"type": "error", "message": message}
+                self.assertIsNone(self.server.summarize_event(error_event))
+                failure_event = {"type": "turn.failed", "error": {"message": message}}
+                self.assertEqual(self.server.summarize_event(failure_event), ("error", "turn.failed"))
+
+
 class ExecutableResolutionTests(unittest.TestCase):
     def test_resolution_order_uses_augmented_path_and_home_fallbacks(self):
-        spec = importlib.util.spec_from_file_location("castor_server", SERVER)
-        server = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(server)
+        server = load_server()
         paths = ["/custom/codex", "/augmented/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
                  "/test-home/.local/bin/codex", "/test-home/.npm-global/bin/codex"]
         candidates = set(paths)
