@@ -54,6 +54,8 @@ class ScriptTests(unittest.TestCase):
         self.skill = self.gemini / "config" / "skills" / "codex-orchestrator"
         self.artifacts = {
             self.install_dir / "server.py": ROOT / "mcp" / "server.py",
+            self.install_dir / "telemetry.py": ROOT / "mcp" / "telemetry.py",
+            self.install_dir / "analytics.py": ROOT / "scripts" / "analytics.py",
             self.install_dir / "report.schema.json": ROOT / "mcp" / "report.schema.json",
             self.skill / "SKILL.md": ROOT / "skills" / "codex-orchestrator" / "SKILL.md",
         }
@@ -134,6 +136,12 @@ class ScriptTests(unittest.TestCase):
             self.assertFalse(target.is_symlink())
             self.assertEqual(target.read_bytes(), source.read_bytes())
         self.assertEqual((self.install_dir / "server.py").stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.install_dir / "telemetry.py").stat().st_mode & 0o777, 0o644)
+        analytics = self.install_dir / "analytics.py"
+        self.assertEqual(analytics.stat().st_mode & 0o777, 0o755)
+        result = subprocess.run([str(analytics), "--help"], cwd=self.root, env=self.env, capture_output=True,
+                                text=True, timeout=5, check=True)
+        self.assertIn("{summary,backfill,feedback,export}", result.stdout)
         expected = read_json(EXAMPLE)
         entry = expected["mcpServers"]["codex-castor"]
         entry["command"] = str(python)

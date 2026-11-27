@@ -19,6 +19,10 @@
           "eager": true,
           "background": "always"
         },
+        "codex_feedback": {
+          "eager": true,
+          "background": "off"
+        },
         "codex_status": {
           "eager": true,
           "background": "off"

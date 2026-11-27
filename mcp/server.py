@@ -30,13 +30,18 @@ DEFAULT_PROTOCOL_VERSION = "2025-03-26"
 SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", DEFAULT_PROTOCOL_VERSION, "2025-06-18", "2025-11-25")
 
 BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+import telemetry
+
 SCHEMA_PATH = BASE_DIR / "report.schema.json"
 MONITOR_URI = "ui://codex-castor/monitor.html"
 MONITOR_MIME = "text/html;profile=mcp-app"
 MONITOR_HTML_PATH = Path(os.environ.get("CODEX_CASTOR_MONITOR_HTML", str(BASE_DIR / "monitor.html")))
 MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui"
 
-STATE_ROOT = Path(os.environ.get("CODEX_CASTOR_STATE_DIR", Path.home() / ".gemini" / "codex-castor"))
+STATE_ROOT = telemetry.default_state_root()
 TASKS_ROOT = STATE_ROOT / "tasks"
 WORKTREES_ROOT = STATE_ROOT / "worktrees"
 
@@ -52,10 +57,7 @@ MODEL_FIELDS = ("model", "reasoning_effort")
 MODEL_RESULT_FIELDS = tuple(
     key for field in MODEL_FIELDS for key in (f"effective_{field}", f"{field}_source", f"config_{field}")
 )
-TOKEN_USAGE_FIELDS = (
-    "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
-    "output_tokens", "reasoning_output_tokens", "total_tokens",
-)
+TOKEN_USAGE_FIELDS = telemetry.TOKEN_FIELDS
 
 
 def log_err(msg: str) -> None:
@@ -129,14 +131,6 @@ def sanitize_task_id(raw: Optional[str]) -> str:
         return cleaned[:80]
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{stamp}-{uuid.uuid4().hex[:6]}"
-
-
-def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{threading.get_ident()}")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
 
 
 def read_json_safe(path: Path) -> Optional[Dict[str, Any]]:
@@ -587,7 +581,11 @@ def execute_codex_round(
     events_path = task_dir / f"events-r{round_num}.jsonl"
     stderr_path = task_dir / f"stderr-r{round_num}.log"
     report_path = task_dir / f"report-r{round_num}.json"
-    meta_path = task_dir / "meta.json"
+    meta.setdefault("rounds", [])
+    meta.setdefault("feedback", {})
+    if not meta.get("task_summary") and round_num == 1:
+        meta["task_summary"] = telemetry.prompt_summary(prompt_file)
+    telemetry.update_totals(meta, task_dir)
 
     started_mono = time.monotonic()
     started_at = utc_now_iso()
@@ -611,7 +609,7 @@ def execute_codex_round(
             "_turn_usage_reported": False,
         }
     )
-    atomic_write_json(meta_path, meta)
+    telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
 
     cancel_flag = threading.Event()
     proc: Optional[subprocess.Popen] = None
@@ -623,7 +621,7 @@ def execute_codex_round(
     try:
         with prompt_file.open("rb") as stdin_f, stderr_path.open("wb") as stderr_f:
             proc = subprocess.Popen(
-                cmd,
+                [resolve_codex_bin(), *cmd],
                 cwd=str(effective_workdir),
                 stdin=stdin_f,
                 stdout=subprocess.PIPE,
@@ -645,7 +643,7 @@ def execute_codex_round(
 
             meta["pid"] = proc.pid
             meta["updated_at"] = utc_now_iso()
-            atomic_write_json(meta_path, meta)
+            telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
             notify_activity(meta, progress_token, 0)
 
             assert proc.stdout is not None
@@ -657,7 +655,7 @@ def execute_codex_round(
                             last_rollout_probe = now
                             if refresh_rollout_metadata(meta):
                                 meta["updated_at"] = utc_now_iso()
-                                atomic_write_json(meta_path, meta)
+                                telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
                         continue
                     ev_f.write(raw_line)
                     ev_f.flush()
@@ -711,36 +709,17 @@ def execute_codex_round(
                         activities.append({"ts": meta["updated_at"], "kind": kind, "text": activity})
                         del activities[:-12]
                     if summary or ev_type in ("item.started", "item.completed"):
-                        atomic_write_json(meta_path, meta)
+                        telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
                     if summary:
                         notify_activity(meta, progress_token, event_count)
 
             exit_code = proc.wait()
         refresh_rollout_metadata(meta)
-        duration = round(time.monotonic() - started_mono, 2)
-        if cancel_flag.is_set():
-            final_status = "cancelled"
-        elif exit_code == 0 and not fatal_errors:
-            final_status = "completed"
-        else:
-            final_status = "failed"
-
-        meta.update(
-            {
-                "status": final_status,
-                "exit_code": exit_code,
-                "pid": None,
-                "event_count": event_count,
-                "duration_seconds": duration,
-                "current_activity": f"{final_status} ({duration}s)",
-                "updated_at": utc_now_iso(),
-                "finished_at": utc_now_iso(),
-            }
-        )
-        meta.pop("_rollout_round_start", None)
-        meta.pop("_turn_usage_reported", None)
-        atomic_write_json(meta_path, meta)
-        notify_activity(meta, progress_token, event_count + 1)
+    except (OSError, RuntimeError) as exc:
+        fatal_errors.append(str(exc))
+        if proc is not None and proc.poll() is None:
+            terminate_process_group(proc)
+        exit_code = proc.wait() if proc is not None else None
     finally:
         if proc is not None and proc.stdout is not None:
             proc.stdout.close()
@@ -748,6 +727,39 @@ def execute_codex_round(
             ACTIVE_BY_REQ_ID.pop(req_id, None)
             if ACTIVE_BY_TASK_ID.get(task_id, {}).get("req_id") == req_id:
                 ACTIVE_BY_TASK_ID.pop(task_id, None)
+
+    duration = round(time.monotonic() - started_mono, 2)
+    if cancel_flag.is_set():
+        final_status = "cancelled"
+    elif exit_code == 0 and not fatal_errors:
+        final_status = "completed"
+    else:
+        final_status = "failed"
+
+    finished_at = utc_now_iso()
+    meta.update(
+        status=final_status, exit_code=exit_code, pid=None, event_count=event_count,
+        duration_seconds=duration, current_activity=f"{final_status} ({duration}s)",
+        updated_at=finished_at, finished_at=finished_at,
+    )
+    meta.pop("_rollout_round_start", None)
+    kind = "dispatch" if prompt_file.name == "spec.md" else "resume"
+    round_entry = telemetry.round_record(round_num, kind, prompt_file, meta)
+    meta.pop("_rollout_usage_baseline", None)
+    meta.pop("_turn_usage_reported", None)
+    history = {item["round"]: item for item in meta["rounds"]}
+    if round_num in history:
+        for key in ("user_first_prompt", "user_first_prompt_at"):
+            round_entry[key] = history[round_num].get(key)
+    history[round_num] = round_entry
+    meta["rounds"] = [history[number] for number in sorted(history)]
+    telemetry.update_totals(meta, task_dir)
+    telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
+    try:
+        telemetry.upsert_task_record(STATE_ROOT, task_dir, meta)
+    except OSError as exc:
+        log_err(f"Could not sync telemetry for {task_id}: {exc}")
+    notify_activity(meta, progress_token, event_count + 1)
 
     report = parse_report_file(report_path, last_agent_message)
     base_commit = meta.get("worktree", {}).get("base_commit")
@@ -769,6 +781,7 @@ def execute_codex_round(
         "worktree": meta.get("worktree"),
         "duration_seconds": duration,
         "usage": meta.get("usage"),
+        **{key: meta[key] for key in telemetry.TOTAL_FIELDS},
         **{key: meta.get(key) for key in MODEL_RESULT_FIELDS},
         "report": report,
         "git": git_summary,
@@ -864,11 +877,9 @@ def handle_codex_dispatch(
             "base_commit": base_commit,
         }
 
-    codex_bin = resolve_codex_bin()
     report_path = task_dir / "report-r1.json"
 
     cmd: List[str] = [
-        codex_bin,
         "exec",
         "--dangerously-bypass-approvals-and-sandbox",
         "--dangerously-bypass-hook-trust",
@@ -939,16 +950,24 @@ def resume_codex_round(
     session_id = args.get("session_id")
     task_dir = TASKS_ROOT / task_id
     meta: Dict[str, Any]
-    if args.get("task_id"):
-        loaded = read_json_safe(task_dir / "meta.json")
-        if not loaded:
-            raise ValueError(f"Unknown task_id: {task_id}")
+    loaded = read_json_safe(task_dir / "meta.json")
+    if args.get("task_id") and not loaded:
+        raise ValueError(f"Unknown task_id: {task_id}")
+    if loaded:
+        if not args.get("task_id") and session_id != loaded.get("session_id"):
+            raise ValueError(f"Task ID '{task_id}' is already used by another session. Pass the intended task_id.")
         if is_pid_alive(loaded.get("pid")):
             raise ValueError(f"Task '{task_id}' is currently running. Wait for it or cancel it first.")
         meta = loaded
+        previous = telemetry.reconstruct_task_record(task_dir, meta)
+        meta.update(rounds=previous["rounds"], feedback=previous["feedback"])
         session_id = session_id or meta.get("session_id")
-        effective_workdir = Path(meta["effective_workdir"]).resolve()
         round_num = int(meta.get("round", 1)) + 1
+        if args.get("task_id"):
+            effective_workdir = Path(meta["effective_workdir"]).resolve()
+        else:
+            effective_workdir = Path(str(args["workdir"])).expanduser().resolve()
+            meta.update(requested_workdir=str(effective_workdir), effective_workdir=str(effective_workdir))
     else:
         task_dir.mkdir(parents=True, exist_ok=True)
         effective_workdir = Path(str(args["workdir"])).expanduser().resolve()
@@ -986,9 +1005,7 @@ def resume_codex_round(
     prompt_path.write_text(feedback_content, encoding="utf-8")
     report_path = task_dir / f"report-r{round_num}.json"
 
-    codex_bin = resolve_codex_bin()
     cmd: List[str] = [
-        codex_bin,
         "exec",
         "resume",
         "--dangerously-bypass-approvals-and-sandbox",
@@ -1007,6 +1024,10 @@ def resume_codex_round(
     meta["session_id"] = str(session_id)
     # A resumed session appends to its rollout. Only entries written this round confirm its settings.
     meta["_rollout_round_start"] = rollout_start_position(str(session_id))
+    meta["_rollout_usage_baseline"] = None
+    if meta["_rollout_round_start"]:
+        prior_runtime = probe_rollout_runtime(str(session_id))
+        meta["_rollout_usage_baseline"] = (prior_runtime or {}).get("usage")
 
     return execute_codex_round(
         req_id=req_id,
@@ -1021,13 +1042,19 @@ def resume_codex_round(
     )
 
 
+def handle_codex_feedback(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    return telemetry.record_feedback(STATE_ROOT, args.get("task_id"), args), False
+
+
 def task_is_alive(meta: Dict[str, Any], task_dir: Path) -> bool:
     with ACTIVE_LOCK:
         claimed = meta.get("task_id", task_dir.name) in CLAIMED_TASKS
     return meta.get("status") == "running" and (claimed or is_pid_alive(meta.get("pid")))
 
 
-def build_task_summary(meta: Dict[str, Any], alive: bool, task_dir: Path) -> Dict[str, Any]:
+def build_task_summary(
+    meta: Dict[str, Any], alive: bool, task_dir: Path, record: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     if alive:
         meta = meta.copy()
         refresh_rollout_metadata(meta)
@@ -1046,6 +1073,9 @@ def build_task_summary(meta: Dict[str, Any], alive: bool, task_dir: Path) -> Dic
             except (ValueError, TypeError):
                 pass
 
+    if record is None and "total_usage" not in meta:
+        record = telemetry.reconstruct_task_record(task_dir, meta)
+    totals = record or meta
     fields = (
         "round", "session_id", "worktree", "model", "reasoning_effort", *MODEL_RESULT_FIELDS,
         "last_event", "event_count", "created_at", "round_started_at", "updated_at", "finished_at",
@@ -1061,6 +1091,9 @@ def build_task_summary(meta: Dict[str, Any], alive: bool, task_dir: Path) -> Dic
         "current_activity": meta.get("current_activity") or meta.get("last_event"),
         "recent_activities": meta.get("recent_activities") or [],
         "elapsed_seconds": elapsed,
+        "round_usage": telemetry.round_usage(meta) if alive else None,
+        **{field: meta.get(field, totals.get(field)) for field in telemetry.TOTAL_FIELDS},
+        "feedback": telemetry.merge_stored_feedback(totals.get("feedback"), meta.get("feedback")),
     }
 
 
@@ -1123,12 +1156,15 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
     selected_id = sanitize_task_id(str(args["task_id"])) if args.get("task_id") else None
     tasks = list_task_metadata()
     tasks.sort(key=lambda item: (item[2], str(item[1].get("updated_at") or "")), reverse=True)
+    records = telemetry.load_or_build_records(STATE_ROOT)
+    by_task_id = {record["task_id"]: record for record in records}
     summaries = []
     selected = None
     for index, (task_dir, meta, alive) in enumerate(tasks):
-        is_selected = meta.get("task_id", task_dir.name) == selected_id
+        task_id = meta.get("task_id", task_dir.name)
+        is_selected = task_id == selected_id
         if index < limit or is_selected:
-            summary = build_task_summary(meta, alive, task_dir)
+            summary = build_task_summary(meta, alive, task_dir, by_task_id.get(task_id))
             if index < limit:
                 summaries.append(summary)
             if is_selected:
@@ -1141,6 +1177,8 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
         "total": len(tasks),
         "tasks": summaries,
         "selected_task": selected,
+        "analytics": telemetry.compute_analytics(records),
+        "telemetry_dir": os.environ.get("CODEX_CASTOR_STATE_DIR", "~/.gemini/codex-castor"),
     }
     lines = [f"Codex Monitor: {active_count} active, {len(tasks)} total"]
     visible = summaries + ([selected] if selected and selected not in summaries else [])
@@ -1173,11 +1211,25 @@ def handle_codex_cancel(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
     elif meta and meta.get("status") == "running" and is_pid_alive(meta.get("pid")):
         pid = meta["pid"]
         killed = terminate_process_group(None, pid=pid)
-        latest = read_json_safe(meta_path)
-        if killed and latest and latest.get("status") == "running" and latest.get("pid") == pid:
-            now = utc_now_iso()
-            latest.update(status="cancelled", pid=None, current_activity="cancelled", updated_at=now, finished_at=now)
-            atomic_write_json(meta_path, latest)
+        if killed:
+            with telemetry.transaction(STATE_ROOT):
+                latest = read_json_safe(meta_path)
+                if latest and latest.get("status") == "running" and latest.get("pid") == pid:
+                    now = utc_now_iso()
+                    elapsed = build_task_summary(latest, True, task_dir)["elapsed_seconds"]
+                    latest.update(status="cancelled", pid=None, current_activity="cancelled",
+                                  updated_at=now, finished_at=now, duration_seconds=elapsed)
+                    latest["rounds"] = telemetry.reconstruct_task_record(task_dir, latest)["rounds"]
+                    latest["rounds"][-1]["duration_estimated"] = elapsed is not None
+                    telemetry.update_totals(latest, task_dir)
+                    telemetry.write_meta(meta_path, latest)
+                else:
+                    latest = None
+            if latest:
+                try:
+                    telemetry.upsert_task_record(STATE_ROOT, task_dir, latest)
+                except OSError as exc:
+                    log_err(f"Could not sync telemetry for {task_id}: {exc}")
 
     return {
         "task_id": task_id,
@@ -1236,9 +1288,10 @@ def handle_codex_cleanup_worktree(args: Dict[str, Any]) -> Tuple[Dict[str, Any],
             messages.append(f"Branch {branch} not deleted: {err or out}")
 
     wt["cleaned_at"] = utc_now_iso()
-    meta["worktree"] = wt
-    meta["updated_at"] = utc_now_iso()
-    atomic_write_json(meta_path, meta)
+    with telemetry.transaction(STATE_ROOT):
+        latest = read_json_safe(meta_path) or meta
+        latest.update(worktree=wt, updated_at=utc_now_iso())
+        telemetry.write_meta(meta_path, latest)
 
     return {
         "task_id": task_id,
@@ -1342,6 +1395,28 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "description": "Optional Codex reasoning effort override.",
                 },
             },
+        },
+    },
+    {
+        "name": "codex_feedback",
+        "description": (
+            "Record or update user/reviewer effectiveness feedback (rating 1–5, verdict, tags, notes) "
+            "and/or the user's first prompt after a Codex round finishes. Automatically updates "
+            "meta.json, telemetry.jsonl, telemetry.csv, and report.md."
+        ),
+        "_meta": {"ui": {"visibility": ["model", "app"]}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "rating": {"type": "integer", "minimum": 1, "maximum": 5},
+                "verdict": {"type": "string", "enum": list(telemetry.VERDICTS)},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string"},
+                "user_first_prompt": {"type": "string"},
+                "round": {"type": "integer", "minimum": 1},
+            },
+            "required": ["task_id"],
         },
     },
     {
@@ -1450,6 +1525,10 @@ def dispatch_tool_call(req_id: Any, params: Dict[str, Any], progress_token: Any 
             payload, is_err = handle_codex_dispatch(req_id, arguments, progress_token)
         elif tool_name == "codex_resume":
             payload, is_err = handle_codex_resume(req_id, arguments, progress_token)
+        elif tool_name == "codex_feedback":
+            payload, is_err = handle_codex_feedback(arguments)
+            if not is_err:
+                structured = payload
         elif tool_name == "codex_status":
             payload, is_err = handle_codex_status(arguments)
             if not is_err:
@@ -1533,7 +1612,8 @@ def handle_message(msg: Dict[str, Any]) -> None:
                     "Async MCP server for local Codex CLI (full permissions). "
                     "codex_dispatch and codex_resume run as Antigravity background tasks: "
                     "yield or handle other work until reactive wakeup. Call codex_status or "
-                    "codex_monitor on user request."
+                    "codex_monitor on user request. Record the user's first reply after each "
+                    "presented round with codex_feedback, including its task_id and round."
                 ),
             },
         )

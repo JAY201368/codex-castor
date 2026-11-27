@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / "mcp" / "server.py"
 TOOL_NAMES = {
     "codex_dispatch", "codex_resume", "codex_status", "codex_cancel", "codex_cleanup_worktree",
-    "codex_monitor",
+    "codex_monitor", "codex_feedback",
 }
 MONITOR_URI = "ui://codex-castor/monitor.html"
 MONITOR_MIME = "text/html;profile=mcp-app"
@@ -104,7 +104,7 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-class ServerTests(unittest.TestCase):
+class ServerHarness(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="codex-castor-tests-")
         self.addCleanup(directory.cleanup)
@@ -266,6 +266,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(result["content"][0]["type"], "text")
         return result["structuredContent"], result["content"][0]["text"]
 
+
+class ServerTests(ServerHarness):
     def test_json_rpc_protocol(self):
         initialized = self.receive(self.send("initialize", {"protocolVersion": "2025-03-26"}))
         self.assertEqual(initialized["result"]["serverInfo"], {"name": "codex-castor", "version": "1.1.0"})
@@ -276,7 +278,7 @@ class ServerTests(unittest.TestCase):
         self.send("notifications/initialized", notification=True)
         self.assertEqual(self.receive(self.send("ping"))["result"], {})
         tools = self.receive(self.send("tools/list"))["result"]["tools"]
-        self.assertEqual(len(tools), 6)
+        self.assertEqual(len(tools), len(TOOL_NAMES))
         self.assertEqual({tool["name"] for tool in tools}, TOOL_NAMES)
         for tool in tools:
             self.assertEqual(tool["inputSchema"]["type"], "object")

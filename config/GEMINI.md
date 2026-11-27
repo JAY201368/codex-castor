@@ -1,6 +1,6 @@
 # Gemini + Codex Asynchronous Collaboration Protocol
 
-You have access to the global `codex-castor` MCP server (`codex_dispatch`, `codex_resume`, `codex_status`, `codex_cancel`, `codex_cleanup_worktree`, `codex_monitor`) and the `codex-orchestrator` skill.
+You have access to the global `codex-castor` MCP server (`codex_dispatch`, `codex_resume`, `codex_feedback`, `codex_status`, `codex_cancel`, `codex_cleanup_worktree`, `codex_monitor`) and the `codex-orchestrator` skill.
 
 ## Role Division
 - **Gemini (You)**: Architecture & design, requirement clarification with the user, decision-making, writing detailed self-contained specifications, dispatching implementation tasks, independent diff/test acceptance, and reporting to the user.
@@ -15,3 +15,4 @@ You have access to the global `codex-castor` MCP server (`codex_dispatch`, `code
 - Start the `toolSummary` for each dispatch or resume with `[model·effort]`, for example `[gpt-6.2-sol·high] Implement auth tests`.
 - **Never** poll `codex_status` or `codex_monitor`, never `sleep`, and never schedule polling timers after dispatching. Tell the user the task was dispatched and either handle unrelated work or end your turn cleanly to remain idle with zero token usage.
 - When dispatching multiple concurrent tasks against the same Git repository, always set `use_worktree: true`.
+- After you present the result of a `codex_dispatch` or `codex_resume` round, record the user's first reply verbatim with `codex_feedback` using the completed `task_id` and `round`. Include any rating, verdict, tags, or notes the user expresses. Record the reply even when the user asks a follow-up question or starts a new task.

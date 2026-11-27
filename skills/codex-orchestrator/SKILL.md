@@ -62,3 +62,9 @@ When Antigravity wakes you with the completed result from `codex_dispatch` or `c
    - **If accepted**:
      - If `use_worktree: true`, merge or cherry-pick `codex/<task_id>` into the target branch, re-run verification if needed, and call `codex_cleanup_worktree(task_id=..., delete_branch=true)` once merged.
      - Present a concise acceptance summary to the user (what changed, verification results, and any follow-up decisions).
+
+## 5. Automatic Telemetry & User Feedback Loop
+
+- Every `codex_dispatch` and `codex_resume` records the task summary, effective model and reasoning effort, per-round and total duration and tokens, and rework count. The server keeps `~/.gemini/codex-castor/telemetry.jsonl`, `telemetry.csv`, and `report.md` in sync.
+- In the acceptance summary, include a compact telemetry line with model·effort, rounds/reworks, total duration, and total tokens. Invite an optional 1–5 rating or brief feedback, including the option to rate in Codex Monitor. Use the cumulative metrics from the tool result and show unavailable values accordingly.
+- **First user prompt capture.** After presenting any round result, remember its `task_id` and `round` until the next user message. When that message arrives, immediately call `codex_feedback(task_id=..., round=..., user_first_prompt=...)` with the message verbatim, before acting on it. Do this for feedback, requests for rework, follow-up questions, and new tasks. If you presented multiple round results together, record the reply for each pending round. Include any rating, verdict, tags, or notes the user expresses about that task. Clear the pending capture for a round once recording succeeds. Later explicit feedback can update the rating, verdict, tags, or notes without resubmitting the first prompt.

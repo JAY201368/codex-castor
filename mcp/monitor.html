@@ -56,7 +56,9 @@
   }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  button:disabled { opacity: .6; cursor: default; }
+  button:disabled, button[aria-disabled="true"] { opacity: .6; cursor: default; }
+  .views { display: flex; gap: 4px; margin-inline-end: 6px; }
+  .views button[aria-pressed="true"] { background: var(--accent); color: var(--paper); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #notice { margin: 0 0 12px; font-size: .83rem; color: var(--rubric); }
   .section + .section { margin-top: 22px; }
@@ -86,6 +88,7 @@
   }
   .model-value { font-weight: 700; color: var(--accent); }
   .override, .cancel { color: var(--rubric); }
+  .task-summary { margin-top: 8px; font-size: .85rem; }
   .details {
     margin-top: 9px; justify-content: space-between; align-items: flex-start;
     gap: 3px 8px; font-size: .75rem; color: var(--color-text-secondary, var(--muted));
@@ -105,6 +108,39 @@
   .state-label { font-size: .75rem; text-transform: capitalize; color: var(--color-text-secondary, var(--muted)); }
   .cancel[aria-pressed="true"] { border-color: var(--rubric); color: var(--rubric); }
   .empty { padding: 20px 12px; text-align: center; color: var(--color-text-secondary, var(--muted)); }
+  .feedback-form {
+    display: grid; gap: 6px; margin-top: 10px; padding-top: 9px;
+    border-top: 1px dotted var(--color-border-primary, var(--line));
+  }
+  .feedback-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 7px; }
+  .feedback-stars { display: inline-flex; gap: 3px; }
+  .feedback-stars button { min-width: 26px; padding: 0 3px; font-size: 1.05rem; }
+  .feedback-form :is(input, select) {
+    min-height: 32px; min-width: 0; padding: 4px 6px; color: inherit;
+    border: 1px solid var(--color-border-primary, var(--line)); border-radius: 4px;
+    background: var(--color-background-primary, var(--paper)); font: inherit; font-size: .78rem;
+  }
+  .feedback-form input { flex: 1; }
+  .feedback-form input::placeholder { color: var(--color-text-secondary, var(--muted)); }
+  .feedback-status, .first-reply, .export-hint {
+    color: var(--color-text-secondary, var(--muted)); font-size: .75rem;
+  }
+  .feedback-status[data-error="true"] { color: var(--rubric); }
+  .kpis {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px 16px;
+    margin: 0 0 22px; padding: 12px 0; border-block: 1px solid var(--color-border-primary, var(--line));
+  }
+  .kpis dt { color: var(--color-text-secondary, var(--muted)); font-size: .76rem; }
+  .kpis dd { margin: 3px 0 0; color: var(--accent); font: 700 1.1rem/1.2 var(--mono); }
+  .table-scroll { overflow-x: auto; }
+  .analytics-table { width: 100%; border-collapse: collapse; font-size: .82rem; white-space: nowrap; }
+  .analytics-table :is(th, td) {
+    padding: 9px 12px; text-align: start; border-bottom: 1px solid var(--color-border-primary, var(--line));
+  }
+  .analytics-table thead { background: var(--color-background-secondary, var(--card)); }
+  .analytics-table :is(th, td):nth-child(n+3) { text-align: end; font-variant-numeric: tabular-nums; }
+  .export-hint { margin-top: 14px; overflow-wrap: anywhere; }
+  .export-hint code { font-family: var(--mono); }
   @media (min-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (min-width: 1120px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   @media (min-width: 960px) {
@@ -126,6 +162,10 @@
   </header>
   <div class="toolbar">
     <div class="controls" aria-label="Monitor controls">
+      <div class="views" role="group" aria-label="View">
+        <button type="button" id="show-tasks" aria-controls="tasks" aria-pressed="true">Tasks</button>
+        <button type="button" id="show-analytics" aria-controls="analytics" aria-pressed="false">Analytics</button>
+      </div>
       <button type="button" id="filter" aria-pressed="false">Active only</button>
       <button type="button" id="pause" aria-pressed="false">Pause</button>
       <button type="button" id="refresh">Refresh</button>
@@ -134,6 +174,7 @@
   </div>
   <p id="notice" role="status" hidden></p>
   <div id="tasks"></div>
+  <div id="analytics" hidden></div>
 </main>
 <script>
 "use strict";
@@ -143,9 +184,13 @@ const parentWindow = window.parent;
 const preview = parentWindow === window || new URLSearchParams(window.location.search).get("demo") === "1";
 const byId = id => document.getElementById(id);
 const tasksView = byId("tasks");
+const analyticsView = byId("analytics");
 const refreshButton = byId("refresh");
 const pending = new Map();
 const feedState = new Map();
+const feedbackDrafts = new Map();
+const savingFeedback = new Set();
+const feedbackMessages = new Map();
 const clocks = [];
 let nextId = 2;
 let parentOrigin = "*";
@@ -157,6 +202,10 @@ let selected = "";
 let count = 0;
 let total = 0;
 let tasks = [];
+let analytics;
+let telemetryDir = "~/.gemini/codex-castor";
+let view = "tasks";
+let taskRenderPending = false;
 let confirmTask = null;
 let cancelling = null;
 let pollTimer;
@@ -230,9 +279,11 @@ function setSnapshot(data) {
   });
   count = data.active_count ?? tasks.filter(live).length;
   total = data.total ?? tasks.length;
+  analytics = data.analytics;
+  telemetryDir = data.telemetry_dir || telemetryDir;
   receivedResult = true;
   if (!tasks.some(task => sameRound(task, confirmTask) && live(task))) confirmTask = null;
-  render();
+  render(undefined, true);
   return true;
 }
 
@@ -329,6 +380,161 @@ function feed(task) {
   return details;
 }
 
+const feedbackVerdicts = ["accepted", "partial", "rework", "rejected", "abandoned"];
+const tokenParts = [["input_tokens", "input"], ["cached_input_tokens", "cached"],
+  ["output_tokens", "output"], ["reasoning_output_tokens", "reasoning"]];
+const number = (value, digits = 0) => value == null ? "—" :
+  value.toLocaleString(undefined, {maximumFractionDigits: digits});
+const percent = value => value == null ? "—" : `${number(value * 100, 1)}%`;
+const duration = value => value == null ? "—" : `${number(value, 2)}s`;
+
+function totalTokens(usage) {
+  return usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+}
+
+function usageBadge(task) {
+  const prior = task.total_usage;
+  const current = live(task) || !prior ? task.round_usage ?? task.usage : null;
+  if (!prior && !current) return null;
+  const total = (prior ? totalTokens(prior) : 0) + (current ? totalTokens(current) : 0);
+  const usage = node("span", "", `${number(total)} tokens`);
+  usage.title = tokenParts.map(([key, label]) =>
+    `${number((prior?.[key] ?? 0) + (current?.[key] ?? 0))} ${label}`).join(" · ");
+  usage.setAttribute("aria-label", `${number(total)} tokens · ${usage.title}`);
+  return usage;
+}
+
+function feedbackForm(task) {
+  const id = task.task_id;
+  const feedback = task.feedback ?? {};
+  const draft = feedbackDrafts.get(id) ?? feedback;
+  const form = node("form", "feedback-form");
+  form.setAttribute("aria-label", `Feedback for ${id}`);
+  const ratingRow = node("div", "feedback-row");
+  const stars = node("div", "feedback-stars");
+  stars.setAttribute("role", "group");
+  stars.setAttribute("aria-label", "Rating");
+  const verdict = node("select");
+  verdict.setAttribute("aria-label", "Verdict");
+  verdict.add(new Option("Verdict", ""));
+  for (const value of feedbackVerdicts) verdict.add(new Option(value[0].toUpperCase() + value.slice(1), value));
+  verdict.value = draft.verdict ?? "";
+  ratingRow.append(stars, verdict);
+
+  const noteRow = node("div", "feedback-row");
+  const notes = node("input");
+  notes.type = "text";
+  notes.placeholder = "Quick feedback note…";
+  notes.setAttribute("aria-label", "Feedback note");
+  notes.value = draft.notes ?? "";
+  const save = node("button", "", "Save");
+  save.type = "submit";
+  noteRow.append(notes, save);
+  const status = node("p", "feedback-status");
+  status.setAttribute("role", "status");
+  let rating = draft.rating;
+
+  function updateForm() {
+    const busy = savingFeedback.has(id);
+    for (const star of stars.children) {
+      const value = Number(star.dataset.rating);
+      star.textContent = value <= rating ? "★" : "☆";
+      star.setAttribute("aria-pressed", String(value === rating));
+      star.setAttribute("aria-disabled", String(busy));
+    }
+    save.setAttribute("aria-disabled", String(busy));
+    const message = feedbackMessages.get(id);
+    status.textContent = message?.text ?? "";
+    status.hidden = !message;
+    status.dataset.error = String(message?.error ?? false);
+  }
+
+  function storeDraft() {
+    const values = {rating, verdict: verdict.value, notes: notes.value};
+    feedbackDrafts.set(id, values);
+    return values;
+  }
+
+  async function submit(nextRating = rating) {
+    if (savingFeedback.has(id)) return;
+    rating = nextRating;
+    const sent = storeDraft();
+    const args = {task_id: id, notes: sent.notes};
+    if (sent.rating != null) args.rating = sent.rating;
+    if (sent.verdict) args.verdict = sent.verdict;
+    savingFeedback.add(id);
+    feedbackMessages.set(id, {text: "Saving…"});
+    updateForm();
+    try {
+      const {task_id, ...changes} = args;
+      let saved = {...feedback, ...changes};
+      if (!preview) {
+        const result = await call("codex_feedback", args);
+        const payload = toolPayload(result);
+        if (result?.isError || !payload?.feedback) {
+          throw new Error(payload?.error || "Could not save feedback");
+        }
+        saved = payload.feedback;
+      }
+      tasks = tasks.map(item => item.task_id === id ? {...item, feedback: saved} : item);
+      if (feedbackDrafts.get(id) === sent) {
+        feedbackDrafts.delete(id);
+        rating = saved.rating;
+        verdict.value = saved.verdict ?? "";
+        notes.value = saved.notes ?? "";
+      }
+      const message = {text: "Feedback saved."};
+      feedbackMessages.set(id, message);
+      setTimeout(() => {
+        if (feedbackMessages.get(id) === message) {
+          feedbackMessages.delete(id);
+          updateForm();
+          if (!form.isConnected) render(undefined, true);
+        }
+      }, 3000);
+      if (preview) {
+        analytics = demoAnalytics(tasks);
+        if (view === "analytics") renderAnalytics();
+      } else {
+        generation++;
+        refresh();
+      }
+    } catch (error) {
+      feedbackMessages.set(id, {text: `Save failed. ${error.message}`, error: true});
+    } finally {
+      savingFeedback.delete(id);
+      updateForm();
+      if (!form.isConnected) render(undefined, true);
+    }
+  }
+
+  for (let value = 1; value <= 5; value++) {
+    const star = node("button");
+    star.type = "button";
+    star.dataset.rating = value;
+    star.setAttribute("aria-label", `${value} of 5 stars`);
+    star.addEventListener("click", () => submit(value));
+    stars.append(star);
+  }
+  notes.addEventListener("input", storeDraft);
+  verdict.addEventListener("change", storeDraft);
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    submit();
+  });
+  form.append(ratingRow, noteRow, status);
+  const first = (feedback.user_first_prompts ?? []).slice().sort((a, b) =>
+    (b.recorded_at ?? "").localeCompare(a.recorded_at ?? "") || b.round - a.round)[0];
+  if (first?.prompt) {
+    const text = first.prompt.replace(/\s+/g, " ").trim();
+    const reply = node("p", "first-reply", `First reply · “${text.length > 150 ? text.slice(0, 149) + "…" : text}”`);
+    reply.title = first.prompt;
+    form.append(reply);
+  }
+  updateForm();
+  return form;
+}
+
 async function cancel(task) {
   if (!sameRound(task, confirmTask)) {
     confirmTask = task;
@@ -359,6 +565,7 @@ async function cancel(task) {
           current_activity: "Task cancelled",
         };
       });
+      if (preview) analytics = demoAnalytics(tasks);
     }
   } catch (error) {
     errorMessage = `Cancel failed. ${error.message}`;
@@ -379,10 +586,15 @@ function taskCard(task) {
   const dot = node("span", "dot");
   dot.setAttribute("aria-hidden", "true");
   const clock = node("span", "clock");
-  clock.setAttribute("aria-label", "Elapsed time");
+  clock.setAttribute("aria-label", "Total elapsed time");
+  clock.title = "Total elapsed time across rounds";
   clocks.push({element: clock, task});
   head.append(dot, node("h3", "", task.task_id), node("span", "round", `r${task.round ?? 1}`), clock);
-  card.append(head, modelStrip(task));
+  const model = modelStrip(task);
+  const reworks = task.rework_count ?? 0;
+  if (reworks > 0) model.append(badge(`${reworks} rework${reworks === 1 ? "" : "s"}`, "override"));
+  card.append(head, model);
+  if (task.task_summary) card.append(node("p", "task-summary", task.task_summary));
 
   const details = node("div", "details");
   const location = task.worktree_branch || task.workdir?.split(/[/\\]/).filter(Boolean).pop();
@@ -391,13 +603,8 @@ function taskCard(task) {
     path.title = task.workdir || location;
     details.append(path);
   }
-  const input = task.usage?.input_tokens;
-  const output = task.usage?.output_tokens;
-  if (typeof input === "number" || typeof output === "number") {
-    const usage = node("span", "", `${((input ?? 0) + (output ?? 0)).toLocaleString()} tokens`);
-    usage.title = `${input ?? 0} input · ${output ?? 0} output`;
-    details.append(usage);
-  }
+  const usage = usageBadge(task);
+  if (usage) details.append(usage);
   if (details.childElementCount) card.append(details);
   const activity = task.current_activity || task.last_event;
   if (activity || running) {
@@ -429,13 +636,15 @@ function taskCard(task) {
     footer.append(button);
   }
   card.append(footer);
+  if (!running) card.append(feedbackForm(task));
   return card;
 }
 
 function tick() {
   const now = performance.now();
   for (const {element, task} of clocks) {
-    const elapsed = task.elapsed + (live(task) ? (now - task.receivedAt) / 1000 : 0);
+    const elapsed = live(task) ? (task.total_duration_seconds ?? 0) + task.elapsed + (now - task.receivedAt) / 1000 :
+      task.total_duration_seconds ?? task.elapsed;
     const seconds = Number.isFinite(elapsed) ? Math.floor(elapsed) : 0;
     const hours = Math.floor(seconds / 3600);
     const digits = [Math.floor(seconds / 60) % 60, seconds % 60];
@@ -445,13 +654,93 @@ function tick() {
   }
 }
 
-function render(focusTask = document.activeElement?.dataset.cancelTask) {
+function renderAnalytics() {
+  const previousScroll = analyticsView.querySelector(".table-scroll");
+  const scrollPosition = previousScroll?.scrollLeft ?? 0;
+  const restoreFocus = previousScroll && document.activeElement === previousScroll;
+  const overall = analytics?.overall;
+  if (!overall) {
+    analyticsView.replaceChildren(node("p", "empty", receivedResult ? "No analytics available." : "Connecting to Codex Castor…"));
+    return;
+  }
+  const kpis = node("dl", "kpis");
+  for (const [label, value] of [
+    ["Total tasks", number(overall.task_count)], ["Completion rate", percent(overall.completion_rate)],
+    ["First-pass rate", percent(overall.first_pass_rate)], ["Avg duration", duration(overall.avg_duration_seconds)],
+    ["Total tokens", number(overall.total_tokens)], ["Avg rating", number(overall.avg_rating, 2)],
+  ]) {
+    const metric = node("div");
+    metric.append(node("dt", "", label), node("dd", "", value));
+    kpis.append(metric);
+  }
+  const section = node("section", "section");
+  const heading = node("h2", "", "Model × Reasoning Effort");
+  heading.id = "matrix-heading";
+  section.append(heading);
+  const rows = analytics.by_model_effort ?? [];
+  if (rows.length) {
+    const table = node("table", "analytics-table");
+    table.setAttribute("aria-labelledby", heading.id);
+    const header = table.createTHead().insertRow();
+    for (const name of ["Model", "Effort", "Tasks", "Avg Time", "Avg Tokens", "Rework Rate", "Avg Rating"]) {
+      const cell = node("th", "", name);
+      cell.scope = "col";
+      header.append(cell);
+    }
+    const body = table.createTBody();
+    for (const row of rows) {
+      const line = body.insertRow();
+      for (const value of [row.model, row.reasoning_effort, number(row.task_count),
+        duration(row.avg_duration_seconds), number(row.avg_total_tokens), percent(row.rework_rate),
+        number(row.avg_rating, 2)]) {
+        line.append(node("td", "", value));
+      }
+    }
+    const scroll = node("div", "table-scroll");
+    scroll.tabIndex = 0;
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-labelledby", heading.id);
+    scroll.append(table);
+    section.append(scroll);
+  } else {
+    section.append(node("p", "empty", "No task telemetry yet."));
+  }
+  const hint = node("p", "export-hint", "Local exports · ");
+  for (const [index, file] of ["telemetry.jsonl", "report.md", "telemetry.csv"].entries()) {
+    if (index) hint.append(" · ");
+    hint.append(node("code", "", `${telemetryDir.replace(/\/$/, "")}/${file}`));
+  }
+  analyticsView.replaceChildren(kpis, section, hint);
+  const scroll = analyticsView.querySelector(".table-scroll");
+  if (scroll) {
+    scroll.scrollLeft = scrollPosition;
+    if (restoreFocus) scroll.focus({preventScroll: true});
+  }
+}
+
+function render(focusTask = document.activeElement?.dataset.cancelTask, background = false) {
+  byId("active").textContent = `${count} active`;
+  byId("total").textContent = `${total} total`;
+  const showTasks = view === "tasks";
+  tasksView.hidden = !showTasks;
+  analyticsView.hidden = showTasks;
+  byId("filter").hidden = !showTasks;
+  byId("show-tasks").setAttribute("aria-pressed", String(showTasks));
+  byId("show-analytics").setAttribute("aria-pressed", String(!showTasks));
+  if (!showTasks) {
+    clocks.length = 0;
+    renderAnalytics();
+    return;
+  }
+  if (background && document.activeElement?.closest(".feedback-form")) {
+    taskRenderPending = true;
+    return;
+  }
+  taskRenderPending = false;
   const focusFeed = document.activeElement?.parentElement?.dataset.feedTask;
   for (const details of tasksView.querySelectorAll("details")) {
     feedState.set(details.dataset.feedTask, details.open);
   }
-  byId("active").textContent = `${count} active`;
-  byId("total").textContent = `${total} total`;
   clocks.length = 0;
   const visible = tasks.filter(task => !selected || task.task_id === selected);
   const groups = [["Active tasks", visible.filter(live)]];
@@ -545,6 +834,17 @@ window.addEventListener("message", event => {
   }
 });
 
+for (const name of ["tasks", "analytics"]) {
+  byId(`show-${name}`).addEventListener("click", () => {
+    view = name;
+    render();
+  });
+}
+tasksView.addEventListener("focusout", () => {
+  requestAnimationFrame(() => {
+    if (taskRenderPending && view === "tasks") render(undefined, true);
+  });
+});
 byId("filter").addEventListener("click", event => {
   activeOnly = !activeOnly;
   event.currentTarget.textContent = activeOnly ? "Show all" : "Active only";
@@ -561,14 +861,44 @@ byId("pause").addEventListener("click", event => {
 refreshButton.addEventListener("click", refresh);
 tickTimer = setInterval(tick, 1000);
 
+function demoAnalytics(sample) {
+  const settled = sample.filter(task => !live(task));
+  const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  const rates = (numerator, denominator) => denominator ? numerator / denominator : 0;
+  const groupStats = tasks => ({
+    task_count: tasks.length,
+    avg_duration_seconds: mean(tasks.map(task => task.total_duration_seconds ?? task.elapsed_seconds)),
+    avg_total_tokens: mean(tasks.map(task => task.total_usage ?? task.usage).filter(Boolean).map(totalTokens)),
+    rework_rate: rates(tasks.filter(task => task.rework_count > 0).length, tasks.length),
+    avg_rating: mean(tasks.map(task => task.feedback?.rating).filter(value => value != null)),
+  });
+  const completed = settled.filter(task => task.status === "completed");
+  const groups = new Map();
+  for (const task of settled) {
+    const key = JSON.stringify([task.effective_model, task.effective_reasoning_effort]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(task);
+  }
+  return {
+    overall: {
+      ...groupStats(settled),
+      completion_rate: rates(completed.length, settled.length),
+      first_pass_rate: rates(completed.filter(task => !task.rework_count).length, completed.length),
+      total_tokens: settled.reduce((sum, task) => sum + totalTokens(task.total_usage ?? task.usage ?? {}), 0),
+    },
+    by_model_effort: Array.from(groups.values(), group => ({
+      model: group[0].effective_model, reasoning_effort: group[0].effective_reasoning_effort, ...groupStats(group),
+    })),
+  };
+}
+
 if (preview) {
   byId("preview").hidden = false;
   if (window.matchMedia("(prefers-color-scheme: dark)").matches) hostContext({theme: "dark"});
   const ago = seconds => new Date(Date.now() - seconds * 1000).toISOString();
-  setSnapshot({
-    server_time: ago(0), active_count: 1, total: 2,
-    tasks: [{
+  const sample = [{
       task_id: "castor-observability", status: "running", alive: true, round: 1,
+      task_summary: "Show dispatched task activity in Codex Monitor.",
       effective_model: "gpt-6.2-sol", effective_reasoning_effort: "high",
       config_model: "gpt-6.2-sol", config_reasoning_effort: "xhigh",
       model_source: "runtime_rollout", reasoning_effort_source: "runtime_rollout",
@@ -582,12 +912,24 @@ if (preview) {
       ],
     }, {
       task_id: "installer-validation", status: "completed", alive: false, round: 2,
+      task_summary: "Validate installer and doctor checks with isolated configuration.",
       effective_model: "gpt-6.2-sol", effective_reasoning_effort: "xhigh",
       model_source: "config", reasoning_effort_source: "config",
       worktree_branch: "codex/installer-validation", elapsed_seconds: 84,
-      current_activity: "✓ Installer checks passed", usage: {input_tokens: 38000, output_tokens: 600},
-    }],
-  });
+      current_activity: "✓ Installer checks passed", rework_count: 1, total_duration_seconds: 139,
+      total_usage: {input_tokens: 86000, cached_input_tokens: 37000, output_tokens: 1700, reasoning_output_tokens: 450},
+      feedback: {rating: 4, verdict: "accepted", notes: "Upgrade and uninstall checks passed.",
+        user_first_prompts: [{round: 2, prompt: "The upgrade works on my machine too.", recorded_at: ago(100)}]},
+    }, {
+      task_id: "statusline-cleanup", status: "completed", alive: false, round: 1,
+      task_summary: "Show the current task name in the terminal status line.",
+      effective_model: "gpt-6.2-sol", effective_reasoning_effort: "high",
+      model_source: "runtime_rollout", reasoning_effort_source: "runtime_rollout",
+      elapsed_seconds: 36, total_duration_seconds: 36, rework_count: 0,
+      total_usage: {input_tokens: 23800, cached_input_tokens: 9200, output_tokens: 460, reasoning_output_tokens: 120},
+      feedback: {},
+    }];
+  setSnapshot({server_time: ago(0), tasks: sample, analytics: demoAnalytics(sample)});
 } else {
   render();
   post({id: 1, method: "ui/initialize", params: {

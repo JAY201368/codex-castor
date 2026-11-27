@@ -20,6 +20,7 @@ MONITOR_MIME = "text/html;profile=mcp-app"
 TOOL_BACKGROUNDS = {
     "codex_dispatch": "always",
     "codex_resume": "always",
+    "codex_feedback": "off",
     "codex_status": "off",
     "codex_cancel": "off",
     "codex_cleanup_worktree": "off",
@@ -99,10 +100,10 @@ def check_codex(args, entry):
     )
 
 
-def check_files(name, server, skill):
+def check_files(name, server, skill, analytics):
     schema = server.with_name("report.schema.json")
     try:
-        for path in (server, schema, skill):
+        for path in (server, schema, server.with_name("telemetry.py"), analytics, skill):
             if not path.is_file():
                 raise ValueError(f"Missing file: {path}")
         data = json.loads(schema.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
@@ -115,7 +116,7 @@ def check_files(name, server, skill):
             raise ValueError(f"{schema} must be a JSON object listing the required report fields")
     except (OSError, ValueError) as exc:
         return check(name, "FAIL", str(exc))
-    return check(name, "PASS", f"Server, report schema, and skill found ({server.parent})")
+    return check(name, "PASS", f"Server, report schema, telemetry, analytics, and skill found ({server.parent})")
 
 
 def check_rules(path):
@@ -199,7 +200,10 @@ def exchange(process, output):
         or not all(isinstance(tool, dict) and isinstance(tool.get("name"), str) for tool in tools)
         or {tool["name"] for tool in tools} != set(TOOL_BACKGROUNDS)
     ):
-        raise ValueError("tools/list did not return the six Codex Castor tools")
+        raise ValueError("tools/list did not return the expected Codex Castor tools")
+    feedback = next(tool for tool in tools if tool["name"] == "codex_feedback")
+    if feedback.get("_meta", {}).get("ui", {}).get("visibility") != ["model", "app"]:
+        raise ValueError("codex_feedback must be visible to the model and app")
     result = request(4, "tools/call", {"name": "codex_status", "arguments": {}})
     if result.get("isError") is not False:
         raise ValueError("codex_status returned an error")
@@ -230,6 +234,9 @@ def exchange(process, output):
     monitor = request(7, "tools/call", {"name": "codex_monitor", "arguments": {}})
     if monitor.get("isError") is not False or not isinstance(monitor.get("structuredContent"), dict):
         raise ValueError("codex_monitor did not return a structured snapshot")
+    analytics = monitor["structuredContent"].get("analytics")
+    if not isinstance(analytics, dict) or analytics.get("overall", {}).get("task_count") != 0:
+        raise ValueError("codex_monitor did not return empty analytics for the temporary state")
 
 
 def check_handshake(server):
@@ -297,18 +304,20 @@ def main():
     if args.repo_only:
         server = REPO_ROOT / "mcp" / "server.py"
         skill = REPO_ROOT / "skills" / "codex-orchestrator" / "SKILL.md"
+        analytics = REPO_ROOT / "scripts" / "analytics.py"
         entry = {}
     else:
         config_dir = gemini / "config"
         server = config_dir / SERVER_NAME / "server.py"
         skill = config_dir / "skills" / "codex-orchestrator" / "SKILL.md"
+        analytics = server.with_name("analytics.py")
         entry, config_check = read_config(config_dir / "mcp_config.json")
 
     checks = [
         check("python_version", "PASS" if sys.version_info >= (3, 9) else "FAIL", sys.version.split()[0]),
         probe_version("git_cli", "git"),
         check_codex(args, entry),
-        check_files("repo_files" if args.repo_only else "installed_files", server, skill),
+        check_files("repo_files" if args.repo_only else "installed_files", server, skill, analytics),
     ]
     if not args.repo_only:
         checks.extend([

@@ -18,6 +18,7 @@ END_MARKER = "<!-- codex-castor:end -->"
 TOOL_BACKGROUNDS = {
     "codex_dispatch": "always",
     "codex_resume": "always",
+    "codex_feedback": "off",
     "codex_status": "off",
     "codex_cancel": "off",
     "codex_cleanup_worktree": "off",
@@ -281,6 +282,8 @@ def run(args):
         entry = server_entry(python, install_dir / "server.py", os.path.abspath(codex) if codex else None)
         for name, target, mode in (
             ("mcp/server.py", install_dir / "server.py", 0o755),
+            ("mcp/telemetry.py", install_dir / "telemetry.py", 0o644),
+            ("scripts/analytics.py", install_dir / "analytics.py", 0o755),
             ("mcp/report.schema.json", install_dir / "report.schema.json", 0o644),
             ("skills/codex-orchestrator/SKILL.md", skill_dir / "SKILL.md", 0o644),
         ):
