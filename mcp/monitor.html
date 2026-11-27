@@ -75,14 +75,14 @@ svg { flex: none; vertical-align: middle; }
 .dot.running, .dot.starting { background: var(--accent); animation: pulse 2s ease-in-out infinite; }
 .dot.completed { background: var(--success); } .dot.failed { background: var(--danger); }
 @keyframes pulse { 50% { opacity: .55; } }
-.toolbar { margin: 18px 0 22px; gap: 4px; }
+.toolbar { margin: 18px 0 22px; gap: 8px; flex-wrap: wrap; }
 .group { gap: 2px; background: var(--subtle); padding: 3px; border-radius: 8px; width: fit-content; }
 .group button { border: 1px solid transparent; background: transparent; color: var(--secondary); }
 .group button[aria-pressed="true"] { background: var(--surface); border-color: var(--border); color: var(--text); box-shadow: 0 1px 3px #0001; }
 .primary button { min-height: 32px; font-size: 13px; padding-inline: 14px; }
 .small-group { padding: 2px; } .small-group button { font-size: 11.5px; min-height: 22px; padding: 1px 7px; }
-#filters { background: transparent; padding: 0; gap: 0; }
-#filters button { background: var(--subtle); min-height: 26px; padding: 6px 9px; line-height: 12px; }
+#filters { background: transparent; padding: 0; gap: 0; margin-inline-start: auto; max-width: 100%; flex-wrap: wrap; }
+#filters button { background: var(--subtle); min-height: 26px; padding: 6px 9px; line-height: 12px; border-radius: 0; white-space: nowrap; }
 #filters button:first-child { border-radius: 6px 0 0 6px; }
 #filters button:last-child { border-radius: 0 6px 6px 0; }
 #filters button[aria-pressed="true"] { background: var(--surface); }
@@ -251,6 +251,8 @@ code, pre { font-size: .94em; } pre { white-space: pre-wrap; overflow-wrap: anyw
     <div class="group small-group" id="filters" role="group" aria-label="Filter tasks">
       <button type="button" id="all" aria-pressed="true">All</button>
       <button type="button" id="active-only" aria-pressed="false">Active</button>
+      <button type="button" id="rated" aria-pressed="false">Rated</button>
+      <button type="button" id="unrated" aria-pressed="false">Unrated</button>
     </div>
   </div>
   <p id="notice" class="notice" role="status" hidden></p>
@@ -301,7 +303,8 @@ let nextId = 2;
 let parentOrigin = "*";
 let ready = false;
 let disposed = false;
-let activeOnly = false;
+const taskFilters = ["all", "active-only", "rated", "unrated"];
+let filter = "all";
 let selected = "";
 let missingSelected = false;
 let count = 0;
@@ -363,6 +366,10 @@ function showNotice(text) {
 
 function live(task) {
   return !!task && (task.status === "running" || task.status === "starting") && task.alive !== false;
+}
+
+function isRated(task) {
+  return task?.feedback?.rating != null && task.feedback.rating > 0;
 }
 
 function sameRound(task, other) {
@@ -859,21 +866,26 @@ function projectGroup(name) {
   return section;
 }
 function renderTasks() {
-  const active = tasks.filter(live);
+  const showActive = filter === "all" || filter === "active-only";
+  const active = showActive ? tasks.filter(live) : [];
   const activeSection = byId("live-section");
   activeSection.hidden = !active.length;
   activeSection.firstChild.replaceChildren(groupTitle("Active", active.length));
   renderCards(activeSection.lastChild, active);
 
+  const projectSection = byId("project-section");
   const groups = new Map();
-  const settled = tasks.filter(task => !live(task)).sort((a,b) => lastFinished(b) - lastFinished(a));
-  for (const task of settled) {
-    const name = projectName(task);
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name).push(task);
-  }
-  byId("project-section").hidden = activeOnly || !groups.size;
-  if (!activeOnly) {
+  if (filter !== "active-only") {
+    const projectTasks = tasks.filter(task => {
+      if (filter === "rated") return isRated(task);
+      if (filter === "unrated") return !isRated(task);
+      return !live(task);
+    }).sort((a, b) => lastFinished(b) - lastFinished(a));
+    for (const task of projectTasks) {
+      const name = projectName(task);
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(task);
+    }
     const container = byId("projects");
     const previous = new Map([...container.children].map(el => [el.dataset.project, el]));
     let index = 0;
@@ -896,10 +908,14 @@ function renderTasks() {
     }
     for (const section of previous.values()) section.remove();
   }
+  projectSection.hidden = !groups.size;
   const empty = byId("task-empty");
-  empty.hidden = active.length > 0 || (!activeOnly && groups.size > 0);
+  empty.hidden = !activeSection.hidden || !projectSection.hidden;
   if (!empty.hidden) empty.textContent = !receivedResult ? "Connecting to Codex Castor…" :
-    activeOnly ? "No active tasks." : "No sessions yet. Dispatched tasks will appear here.";
+    filter === "active-only" ? "No active tasks." :
+    filter === "rated" ? "No rated tasks." :
+    filter === "unrated" ? "No unrated tasks." :
+    "No sessions yet. Dispatched tasks will appear here.";
 }
 // Markdown stays text throughout. Only these block and inline elements are constructed.
 function inline(parent, text) {
@@ -1468,7 +1484,7 @@ function render() {
   document.body.classList.toggle("overlay-open", overlay);
   byId("filters").hidden = view === "analytics";
   byId("active-only").textContent = count ? "Active (" + count + ")" : "Active";
-  pressed(byId("all"), !activeOnly); pressed(byId("active-only"), activeOnly);
+  for (const name of taskFilters) pressed(byId(name), filter === name);
   pressed(byId("show-tasks"), view !== "analytics"); pressed(byId("show-analytics"), view === "analytics");
   tasksView.hidden = view === "analytics"; analyticsView.hidden = view !== "analytics";
   if (view === "tasks") renderTasks();
@@ -1665,8 +1681,8 @@ function demoDetail(task) {
 }
 
 for (const name of ["tasks", "analytics"]) byId("show-" + name).addEventListener("click", () => switchView(name));
-for (const name of ["all", "active-only"]) byId(name).addEventListener("click", () => {
-  activeOnly = name !== "all"; render();
+for (const name of taskFilters) byId(name).addEventListener("click", () => {
+  filter = name; render();
 });
 document.addEventListener("keydown", event => {
   if (event.key === "Tab" && selected) {

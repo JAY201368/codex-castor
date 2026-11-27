@@ -401,7 +401,7 @@ class MonitorTests(unittest.TestCase):
 
     def test_monitor_views_controls_and_theme(self):
         buttons = {attrs.get("id") for tag, attrs in self.document.tags if tag == "button"}
-        self.assertTrue({"show-tasks", "show-analytics", "all", "active-only"} <= buttons)
+        self.assertTrue({"show-tasks", "show-analytics", "all", "active-only", "rated", "unrated"} <= buttons)
         self.assertFalse({"pause", "refresh"} & buttons)
         self.assertNotRegex(self.html, r"(?i)>\s*(?:pause|refresh)\s*</button>")
         for token in ("include_detail", "task_detail", "Configuration", "Runtime Status", "Message Stream",
@@ -409,6 +409,15 @@ class MonitorTests(unittest.TestCase):
             self.assertIn(token, self.html)
         self.assertNotIn("innerHTML", self.html)
         self.assertLess(MONITOR.stat().st_size, 120 * 1024)
+
+    def test_monitor_rating_filters(self):
+        script, = self.document.scripts
+        for token in ("function isRated(task)", "task?.feedback?.rating != null && task.feedback.rating > 0",
+                      'if (filter === "rated") return isRated(task);',
+                      'if (filter === "unrated") return !isRated(task);',
+                      "No rated tasks.", "No unrated tasks."):
+            with self.subTest(token=token):
+                self.assertIn(token, script)
 
     def test_monitor_project_groups_sheets_and_polling(self):
         elements = {attrs["id"]: (tag, attrs) for tag, attrs in self.document.tags if "id" in attrs}
