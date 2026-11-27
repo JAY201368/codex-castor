@@ -399,6 +399,40 @@ class MonitorTests(unittest.TestCase):
                 self.assertIn(token, script)
         self.assertLess(script.index('window.addEventListener("message"'), script.index('method: "ui/initialize"'))
 
+    def test_monitor_views_controls_and_theme(self):
+        buttons = {attrs.get("id") for tag, attrs in self.document.tags if tag == "button"}
+        self.assertTrue({"show-tasks", "show-analytics", "all", "active-only"} <= buttons)
+        self.assertFalse({"pause", "refresh"} & buttons)
+        self.assertNotRegex(self.html, r"(?i)>\s*(?:pause|refresh)\s*</button>")
+        for token in ("include_detail", "task_detail", "Configuration", "Runtime Status", "Message Stream",
+                      'data-theme="dark"', "--color-background-primary", "--font-sans", "prefers-color-scheme: dark"):
+            self.assertIn(token, self.html)
+        self.assertNotIn("innerHTML", self.html)
+        self.assertLess(MONITOR.stat().st_size, 120 * 1024)
+
+    def test_monitor_project_groups_sheets_and_polling(self):
+        elements = {attrs["id"]: (tag, attrs) for tag, attrs in self.document.tags if "id" in attrs}
+        self.assertEqual(elements["home-layer"][0], "main")
+        for level, name in [(2, "detail-layer"), (3, "sub-layer")]:
+            tag, attrs = elements[name]
+            self.assertEqual(tag, "div")
+            self.assertEqual(attrs["role"], "dialog")
+            self.assertEqual(attrs["aria-modal"], "true")
+            self.assertIn("hidden", attrs)
+            self.assertIn(f"level-{level}", attrs["class"].split())
+        script, = self.document.scripts
+        for token in ("expandedProjects = new Set()", 'setAttribute("aria-expanded"', "projectName(task)",
+                      "event.target === detailLayer", "event.target === subLayer", "homeLayer.inert",
+                      'fullViewButton("prompt")', 'fullViewButton("stream")', 'back.id = "back-sub"',
+                      "count > 0 || live(selectedTask()) ? 1000 : 8000", "setInterval(tick, 1000)",
+                      "{limit: 0, task_id: selected, include_detail: true}", "{limit: 200}",
+                      "task.finished_at || task.updated_at || task.created_at",
+                      'new Option("Undecided", "")'):
+            with self.subTest(token=token):
+                self.assertIn(token, script)
+        self.assertNotIn('new Option("Verdict", "")', script)
+        self.assertNotIn("Show full prompt", self.html)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for JavaScript syntax verification")
     def test_inline_javascript_syntax(self):
         script, = self.document.scripts

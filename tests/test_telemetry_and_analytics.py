@@ -101,6 +101,29 @@ class LedgerTests(unittest.TestCase):
             text = f"# Title\n{heading}\n\n<!-- drafting notes -->\n~~~\ncode block\n~~~\n* Enable telemetry.\n## Next"
             self.assertEqual(telemetry.extract_summary(text), "Enable telemetry.")
 
+    def test_session_title_uses_heading_or_objective(self):
+        self.assertEqual(telemetry.extract_title(
+            "<!-- # Hidden -->\n~~~md\n# Example\n~~~\n# Task Q2: **Review** [runtime](target) `state`\nBody"
+        ), "Review runtime state")
+        self.assertEqual(telemetry.extract_title(
+            "## 1. Objective\n- Investigate and diagnose why exports fail （on CI） during upgrades: details"
+        ), "Diagnose why exports fail during upgrades")
+        self.assertEqual(telemetry.extract_title(
+            "# Context\nA preliminary note\n## Objective\nImplement the approved session browser (mcp/monitor.html)."
+        ), "Implement session browser")
+        self.assertEqual(telemetry.extract_title(
+            "Perform an independent, thorough, read-only root-cause analysis of lost events"
+        ), "Root-cause analysis of lost events")
+        self.assertEqual(telemetry.prompt_title(self.root / "missing", task_id="20261127-100300-diag-slow_jobs"),
+                         "Diagnose slow jobs")
+
+    def test_card_preview_omits_heading_code_and_comments(self):
+        text = "# Build a monitor\n<!-- private notes -->\n## 1. Objective\n```sh\nsecret\n```\n"
+        text += "- Show **live** [events](target).\n1. Include `commands`.\n"
+        self.assertEqual(telemetry.extract_prompt_preview(text), "Show live events. Include commands.")
+        self.assertEqual(telemetry.extract_prompt_preview("# Objective\nRead the full prompt"), "Read the full prompt")
+        self.assertEqual(telemetry.prompt_preview(self.root / "missing"), "")
+
     def test_reconstruction_uses_event_usage_and_exact_final_duration(self):
         folder, meta = write_history(self.state)
         record = telemetry.reconstruct_task_record(folder, meta)
@@ -335,6 +358,11 @@ class McpTelemetryTests(test_server.ServerHarness):
         self.append_rollout({"type": "event_msg", "payload": {"type": "token_count", "info": {
             "total_token_usage": {"input_tokens": 42, "output_tokens": 8, "total_tokens": 50},
         }}})
+        snapshot, _ = self.monitor(task_id="delta", include_detail=True)
+        runtime = snapshot["task_detail"]["runtime"]
+        self.assertTrue(runtime["alive"])
+        self.assertEqual([r["usage"]["total_tokens"] for r in runtime["rounds"]], [16, 34])
+        self.assertEqual(runtime["usage"]["total_tokens"], 50)
         (self.sync / "finish").touch()
         result = self.tool_result(request)
         self.assertEqual(result["usage"]["total_tokens"], 50)

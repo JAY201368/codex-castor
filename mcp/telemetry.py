@@ -154,6 +154,128 @@ def prompt_summary(path: Path) -> str:
         return ""
 
 
+_HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
+_GENERIC = re.compile(
+    r"^(?:\d+[.)]\s*)?(objective|goal|summary|overview|context|background|specification|"
+    r"requirements|task|prompt|description|feedback|instructions|scope)\s*[:：]?$", re.I,
+)
+_TITLE_PREFIX = re.compile(
+    r"^(?:specification|spec|task(?:\s+[\w-]+)?|from-scratch redesign|redesign|goal|plan):\s*", re.I,
+)
+
+
+def _prompt_lines(text):
+    fence = ""
+    comment = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if fence:
+            if line.startswith(fence) and not line.strip(fence[0]):
+                fence = ""
+            continue
+        if comment:
+            _, end, line = line.partition("-->")
+            comment = not end
+        while "<!--" in line:
+            before, _, rest = line.partition("<!--")
+            _, end, after = rest.partition("-->")
+            comment = not end
+            line = before + after
+        line = line.strip()
+        marker = re.match(r"^(`{3,}|~{3,})", line)
+        if marker:
+            fence = marker[1]
+        elif line and not re.fullmatch(r"[-*_\s]{3,}", line):
+            yield line
+
+
+def _plain_text(line):
+    line = re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", line)
+    line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+    return " ".join(line.replace("*", "").replace("`", "").split())
+
+
+def _shorten(text, limit):
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    head = text[:limit - 1]
+    if " " in head and text[limit - 1] != " " and not head.endswith(" "):
+        head = head.rsplit(" ", 1)[0]
+    return head.rstrip() + "…"
+
+
+def extract_title(text: str, *, task_id: str = "", max_len: int = 68) -> str:
+    first = objective = ""
+    in_objective = False
+    for line in _prompt_lines(text):
+        heading = _HEADING.match(line)
+        if heading:
+            title = _TITLE_PREFIX.sub("", _plain_text(heading[1]))
+            generic = _GENERIC.fullmatch(title)
+            if not first and re.match(r"^#{1,2}\s", line) and title and not generic:
+                return _shorten(title, max_len)
+            in_objective = bool(generic and generic[1].lower() == "objective")
+        else:
+            body = _plain_text(line)
+            first = first or body
+            if in_objective and body:
+                objective = body
+                break
+    title = objective or first
+    if title:
+        simple = " ".join(re.sub(r"\([^()]*\)|（[^（）]*）", "", title).split())
+        if len(simple) >= 18:
+            title = simple
+        title = re.sub(r"^perform an independent, thorough, read-only (root-cause analysis\b\s*)?",
+                       lambda m: "Root-cause analysis " if m[1] else "Root-cause analysis: ", title, flags=re.I)
+        title = re.sub(r"^investigate and diagnose why ", "Diagnose why ", title, flags=re.I)
+        title = re.sub(r"^implement the approved ", "Implement ", title, flags=re.I)
+        for boundary in re.finditer(r"[:：。]|\.(?=\s|$)", title):
+            if 20 <= boundary.start() <= max_len:
+                title = title[:boundary.start()].rstrip()
+                break
+    else:
+        title = re.sub(r"^\d{8}-\d{6}-(?=\w)", "", task_id)
+        title = re.sub(r"[-_]+", " ", title).strip()
+        title = re.sub(r"^(feat|diag|impl) ", lambda m: {
+            "feat": "Add ", "diag": "Diagnose ", "impl": "Implement ",
+        }[m[1].lower()], title, flags=re.I)
+    return _shorten(re.sub(r"^[a-z]", lambda m: m[0].upper(), title), max_len)
+
+
+def _read_prompt(path):
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def prompt_title(path: Path, *, task_id: str = "", max_len: int = 68) -> str:
+    return extract_title(_read_prompt(path), task_id=task_id, max_len=max_len)
+
+
+def extract_prompt_preview(text: str, *, max_len: int = 220) -> str:
+    lines = []
+    for index, line in enumerate(_prompt_lines(text)):
+        heading = _HEADING.match(line)
+        if heading:
+            line = heading[1]
+            if (index == 0 and re.match(r"^#{1,2}\s", heading[0])) or _GENERIC.fullmatch(_plain_text(line)):
+                continue
+        clean = _plain_text(line)
+        if clean:
+            lines.append(clean)
+        if len(lines) == 3:
+            break
+    return _shorten(" ".join(lines), max_len)
+
+
+def prompt_preview(path: Path, *, max_len: int = 220) -> str:
+    return extract_prompt_preview(_read_prompt(path), max_len=max_len)
+
+
 def jsonl(path: Path):
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
@@ -669,14 +791,13 @@ def record_feedback(state_root: Path, task_id: str, updates: dict) -> dict:
         if prompt.strip():
             changes["user_first_prompts"] = [{"round": target, "prompt": prompt, "recorded_at": now}]
         feedback = merge_feedback(record["feedback"], changes)
-        record.update(feedback=feedback, updated_at=now, rounds=apply_round_prompts(record["rounds"], feedback))
+        record.update(feedback=feedback, rounds=apply_round_prompts(record["rounds"], feedback))
         if running:
             history = meta.get("rounds") or [item for item in record["rounds"] if item["round"] < current_round]
             meta["rounds"] = apply_round_prompts(history, feedback)
         else:
             meta["rounds"] = record["rounds"]
         meta["feedback"] = feedback
-        meta["updated_at"] = now
         update_totals(meta, task_dir)
         write_meta(path, meta)
         _commit_record(state_root, record, records)

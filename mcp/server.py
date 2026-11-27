@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Iterator, List, Optional, Tuple
@@ -459,7 +460,7 @@ def compact_text(value: Any, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
-def clean_shell_command(cmd: str) -> str:
+def clean_shell_command(cmd: str, *, full: bool = False) -> str:
     if re.match(r"^\s*(?:/bin/)?(?:zsh|bash|sh)\s+-l?c\s", cmd):
         try:
             parts = shlex.split(cmd)
@@ -467,7 +468,20 @@ def clean_shell_command(cmd: str) -> str:
             parts = []
         if len(parts) == 3:
             cmd = parts[2]
-    return compact_text(cmd)
+    return cmd if full else compact_text(cmd)
+
+
+def _extract_report_summary(raw_text_or_path):
+    try:
+        if isinstance(raw_text_or_path, Path):
+            report = read_json_safe(raw_text_or_path)
+        else:
+            report = json.loads(raw_text_or_path)
+    except (TypeError, ValueError):
+        return ""
+    if isinstance(report, dict) and isinstance(report.get("summary"), str):
+        return compact_text(report["summary"], 160)
+    return ""
 
 
 def summarize_event(ev: Dict[str, Any]) -> Optional[Tuple[str, str]]:
@@ -706,7 +720,12 @@ def execute_codex_round(
                         kind, activity = summary
                         meta["last_event"] = meta["current_activity"] = activity
                         activities = meta["recent_activities"]
-                        activities.append({"ts": meta["updated_at"], "kind": kind, "text": activity})
+                        entry = {"ts": meta["updated_at"], "kind": kind, "text": activity}
+                        if kind == "message":
+                            report_summary = _extract_report_summary(ev["item"].get("text"))
+                            if report_summary:
+                                entry["report_summary"] = report_summary
+                        activities.append(entry)
                         del activities[:-12]
                     if summary or ev_type in ("item.started", "item.completed"):
                         telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
@@ -906,6 +925,8 @@ def handle_codex_dispatch(
         "worktree": worktree_info,
         "pid": None,
     }
+    if title := nonempty_string(args.get("title")):
+        meta["title"] = title
     set_round_model(meta, args, effective_workdir, cmd)
 
     extra_dirs = args.get("extra_writable_dirs")
@@ -1052,6 +1073,48 @@ def task_is_alive(meta: Dict[str, Any], task_dir: Path) -> bool:
     return meta.get("status") == "running" and (claimed or is_pid_alive(meta.get("pid")))
 
 
+def primary_prompt(task_dir):
+    spec = task_dir / "spec.md"
+    resume = task_dir / "feedback-r1.md"
+    return resume if not spec.is_file() and resume.is_file() else spec
+
+
+def latest_activity(meta, task_dir, alive, status):
+    if not alive and status == "completed":
+        report = _extract_report_summary(task_dir / f"report-r{meta.get('round') or 1}.json")
+        if report:
+            return {"kind": "report", "text": report}
+    prefixes = {"▶": "command", "✓": "command", "✗": "command", "✎": "file", "💬": "message",
+                "🔎": "search", "⚙": "tool", "💭": "thinking", "⚠": "error"}
+    recent = list(reversed(meta.get("recent_activities") or []))
+    current = meta.get("current_activity") or meta.get("last_event")
+    fallback_kind = "error" if status == "failed" else "status"
+    if current:
+        entry = {"text": current, "kind": fallback_kind}
+        if not alive:
+            recent.append(entry)
+        elif not recent or recent[0].get("text") != current:
+            recent.insert(0, entry)
+    for entry in recent:
+        raw = str(entry.get("report_summary") or entry.get("text") or "").strip()
+        kind = entry.get("kind")
+        if not raw or kind == "turn" or raw.startswith(("turn.", "thread.")):
+            continue
+        marker = raw[:1]
+        if marker in prefixes:
+            raw = raw[1:].lstrip("\ufe0f ")
+            kind = prefixes[marker]
+        if kind in ("cmd_start", "cmd_done"):
+            kind = "command"
+        if raw.startswith("{"):
+            # Older metadata can contain a JSON prefix cut off by compact_text.
+            raw = _extract_report_summary(raw) or "Assistant report"
+        if kind == "error" and noisy_warning(raw):
+            continue
+        return {"kind": kind if kind in prefixes.values() else "status", "text": compact_text(raw, 160)}
+    return {"kind": fallback_kind, "text": str(status or "Idle")}
+
+
 def build_task_summary(
     meta: Dict[str, Any], alive: bool, task_dir: Path, record: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -1076,6 +1139,10 @@ def build_task_summary(
     if record is None and "total_usage" not in meta:
         record = telemetry.reconstruct_task_record(task_dir, meta)
     totals = record or meta
+    task_id = meta.get("task_id") or task_dir.name
+    prompt = primary_prompt(task_dir)
+    fallback = meta.get("task_summary") or totals.get("task_summary") or ""
+    workspace = meta.get("requested_workdir") or (meta.get("worktree") or {}).get("repo_root") or meta.get("effective_workdir")
     fields = (
         "round", "session_id", "worktree", "model", "reasoning_effort", *MODEL_RESULT_FIELDS,
         "last_event", "event_count", "created_at", "round_started_at", "updated_at", "finished_at",
@@ -1084,9 +1151,15 @@ def build_task_summary(
     return {
         **{field: meta.get(field) for field in fields},
         "task_id": meta.get("task_id", task_dir.name),
+        "task_title": (nonempty_string(meta.get("title")) or telemetry.prompt_title(prompt)
+                       or telemetry.extract_title(fallback, task_id=task_id)),
+        "prompt_preview": telemetry.prompt_preview(prompt) or fallback,
+        "latest_activity": latest_activity(meta, task_dir, alive, status),
         "status": status,
         "alive": alive,
         "workdir": meta.get("effective_workdir"),
+        "requested_workdir": meta.get("requested_workdir"),
+        "project": Path(workspace).name if workspace else None,
         "worktree_branch": (meta.get("worktree") or {}).get("branch"),
         "current_activity": meta.get("current_activity") or meta.get("last_event"),
         "recent_activities": meta.get("recent_activities") or [],
@@ -1095,6 +1168,282 @@ def build_task_summary(
         **{field: meta.get(field, totals.get(field)) for field in telemetry.TOTAL_FIELDS},
         "feedback": telemetry.merge_stored_feedback(totals.get("feedback"), meta.get("feedback")),
     }
+
+
+def noisy_warning(message):
+    return "is ignoring" in message or "--dangerously-bypass-hook-trust" in message
+
+
+def stream_item(event, number, workdir, prior):
+    event_type = event.get("type")
+    item = event.get("item") or {}
+    if not isinstance(item, dict):
+        return None
+    starting = event_type == "item.started"
+    status = "running" if starting else "completed"
+    meta = (prior or {}).get("meta", {}).copy()
+    body = ""
+    if event_type == "turn.completed":
+        kind, title = "turn_status", "Turn completed"
+        meta = {"usage": telemetry.normalize_usage(event.get("usage"))}
+    elif event_type in ("turn.failed", "error") or item.get("type") == "error":
+        error = event.get("error") or item.get("message") or event.get("message")
+        body = str((error.get("message") if isinstance(error, dict) else error) or "Turn failed")
+        if noisy_warning(body):
+            return None
+        kind, status, title = "error", "failed", "Error"
+    elif event_type in ("item.started", "item.completed"):
+        kind = item.get("type")
+        if item.get("status") == "failed":
+            status = "failed"
+        if kind == "command_execution":
+            kind = "command"
+            cmd = clean_shell_command(str(item.get("command") or meta.get("command", "")), full=True)
+            title = compact_text(cmd, 180) or "Command"
+            output = str(item.get("aggregated_output", (prior or {}).get("body", "")) or "")
+            body = output[:4000]
+            rc = item.get("exit_code")
+            meta.update(command=cmd, exit_code=rc, output_truncated=len(output) > 4000 or
+                        ("aggregated_output" not in item and bool(meta.get("output_truncated"))))
+            if rc not in (None, 0):
+                status = "failed"
+        elif kind == "file_change":
+            if "changes" in item:
+                files = []
+                for change in item.get("changes") or []:
+                    if not isinstance(change, dict) or not change.get("path"):
+                        continue
+                    path = Path(os.path.normpath(change["path"]))
+                    if workdir and path.is_relative_to(workdir):
+                        path = path.relative_to(workdir)
+                    files.append({"path": str(path), "kind": change.get("kind") or "update"})
+                meta["files"] = files
+            count = len(meta.setdefault("files", []))
+            title = f"{'Editing' if starting else 'Changed'} {count} file{'s' if count != 1 else ''}"
+        elif kind == "agent_message":
+            body = str(item.get("text") or "")
+            try:
+                report = json.loads(body)
+            except ValueError:
+                report = None
+            if isinstance(report, dict) and isinstance(report.get("summary"), str) and "status" in report:
+                kind, title, body = "report", "Final Report", report["summary"]
+                meta = {key: report.get(key) for key in (
+                    "status", "summary", "files_changed", "commands_run", "tests_summary", "open_issues")}
+            else:
+                kind, title = "message", "Assistant"
+                meta = {"truncated": len(body) > 12000}
+                body = body[:12000]
+        elif kind == "web_search":
+            action = item.get("action") or {}
+            queries = action.get("queries") or meta.get("queries") or []
+            title = item.get("query") or action.get("query") or ", ".join(map(str, queries))
+            title = title or (prior or {}).get("title")
+            if not title:
+                return None
+            kind, meta = "search", {"queries": queries}
+        elif kind == "mcp_tool_call":
+            title = item.get("tool") or item.get("name") or meta.get("tool") or "Tool call"
+            kind, meta = "tool", {"tool": title, "server": item.get("server") or meta.get("server")}
+        elif kind == "reasoning":
+            title, body = "Reasoning", str(item.get("text") or (prior or {}).get("body") or "")[:4000]
+            if not body.strip():
+                return None
+        else:
+            return None
+    else:
+        return None
+    entry = {"round": number, "kind": kind, "status": status, "title": title, "body": body, "meta": meta}
+    ts = event.get("timestamp") or event.get("ts") or (prior or {}).get("ts")
+    if ts is not None:
+        entry["ts"] = ts
+    return entry
+
+
+def append_round_stream(messages, path, number, workdir):
+    """Merge into the retained timeline, ordering items by their first event."""
+    positions, emitted = {}, set()
+    event_count = item_count = 0
+    for event_count, event in enumerate(telemetry.jsonl(path), 1):
+        item = event.get("item")
+        item_id = item.get("id") if isinstance(item, dict) else None
+        position = event_count
+        timestamp = event.get("timestamp") or event.get("ts")
+        if isinstance(item_id, (int, str)):
+            position, timestamp = positions.setdefault(item_id, (event_count, timestamp))
+        key = (number, position)
+        if position in emitted and key not in messages:
+            continue  # Completion of an item outside the retained window.
+        entry = stream_item(event, number, workdir, messages.get(key))
+        if entry is None:
+            continue
+        entry["stream_id"] = f"{number}-{position}"
+        if timestamp is not None:
+            entry.setdefault("ts", timestamp)
+        later = []
+        if key not in messages:
+            item_count += 1
+            emitted.add(position)
+            # An empty search or reasoning placeholder may only acquire its
+            # display text on completion, after other items have appeared.
+            if position != event_count:
+                later = [k for k in messages if k > key]
+        messages[key] = entry
+        for k in later:
+            messages.move_to_end(k)
+        if len(messages) > 250:
+            messages.popitem(last=False)
+    return item_count, event_count
+
+
+def build_task_detail(task_dir, meta, alive, summary, record):
+    latest = max(1, int(meta.get("round") or 1))
+    history = {r["round"]: r for r in (record or {}).get("rounds", [])}
+    history.update({r["round"]: r for r in meta.get("rounds") or []})
+    worktree = meta.get("worktree") or {}
+    config = {key: summary.get(key) for key in (
+        "task_id", "session_id", *MODEL_RESULT_FIELDS, "created_at", "round_started_at", "updated_at", "finished_at")}
+    for key in MODEL_FIELDS:
+        config[f"effective_{key}"] = config[f"effective_{key}"] or meta.get(key)
+    config.update(project=summary["project"],
+                  requested_workdir=meta.get("requested_workdir"), effective_workdir=meta.get("effective_workdir"),
+                  worktree_enabled=bool(worktree.get("enabled")), worktree_branch=worktree.get("branch"),
+                  worktree_base_commit=worktree.get("base_commit"), round_count=latest, rework_count=latest - 1)
+
+    messages = OrderedDict()
+    rounds, prompts = [], []
+    total_items = event_count = 0
+    for number in range(1, latest + 1):
+        path = primary_prompt(task_dir) if number == 1 else task_dir / f"feedback-r{number}.md"
+        kind = "dispatch" if path.name == "spec.md" else "resume"
+        if path.is_file():
+            with path.open(encoding="utf-8", errors="replace") as stream:
+                text = stream.read(120001)
+            prompts.append({"round": number, "kind": kind, "filename": path.name,
+                            "text": text[:120000], "truncated": len(text) > 120000})
+
+        r = history.get(number) or telemetry.historical_round(task_dir, meta, number, latest)
+        row = {key: r.get(key) for key in (
+            "status", "model", "reasoning_effort", "duration_seconds", "started_at", "finished_at")}
+        row.update(round=number, kind=kind, prompt_file=path.name,
+                   usage=telemetry.normalize_usage(r.get("usage")))
+        if number == latest:
+            row.update(status=summary["status"], model=config["effective_model"] or row["model"],
+                       reasoning_effort=config["effective_reasoning_effort"] or row["reasoning_effort"])
+            if alive:
+                row.update(usage=summary.get("round_usage") or row["usage"],
+                           duration_seconds=summary["elapsed_seconds"], finished_at=None)
+        rounds.append(row)
+        if latest > 1:
+            messages[(number, 0)] = {
+                "round": number, "kind": "round_start", "title": f"Round {number} · {kind.title()}",
+                "status": "info", "body": "", "meta": {"round": number, "prompt_kind": kind},
+            }
+            total_items += 1
+        items, round_events = append_round_stream(
+            messages, task_dir / f"events-r{number}.jsonl", number, meta.get("effective_workdir"))
+        total_items += items
+        event_count += max(round_events, (summary.get("event_count") or 0) if number == latest else 0)
+        while len(messages) > 250:
+            messages.popitem(last=False)
+    usage = summary.get("total_usage") or telemetry.sum_usage(rounds)
+    duration = summary.get("total_duration_seconds")
+    if alive:
+        # Stored totals cover finished rounds. A backfilled record may already
+        # include the live round, so prefer its individual rows in that case.
+        prior_usage = meta.get("total_usage") or telemetry.sum_usage(rounds[:-1])
+        usage = telemetry.sum_usage([{"usage": prior_usage}, rounds[-1]])
+        prior_duration = meta.get("total_duration_seconds")
+        if prior_duration is None:
+            prior_duration = sum(r.get("duration_seconds") or 0 for r in rounds[:-1])
+        duration = prior_duration + (summary.get("elapsed_seconds") or 0)
+    elif duration is None:
+        duration = sum(r.get("duration_seconds") or 0 for r in rounds)
+    runtime = {key: summary.get(key) for key in (
+        "status", "alive", "exit_code", "elapsed_seconds", "current_activity", "latest_activity")}
+    runtime.update(total_duration_seconds=round(duration, 2),
+                   event_count=event_count, usage=telemetry.normalize_usage(usage or {}), rounds=rounds)
+    detail = {"task_id": summary["task_id"], "task_title": summary["task_title"], "config": config,
+              "runtime": runtime, "prompts": prompts, "messages": list(messages.values()),
+              "messages_truncated": total_items > len(messages), "total_stream_items": total_items}
+    stderr = task_dir / f"stderr-r{latest}.log"
+    if summary["status"] != "completed" and stderr.is_file():
+        with stderr.open("rb") as stream:
+            stream.seek(max(0, stream.seek(0, os.SEEK_END) - 16000))
+            tail = "\n".join(stream.read().decode("utf-8", "replace").splitlines()[-40:])[-4000:]
+        if tail.strip():
+            detail["stderr_tail"] = tail
+    return detail
+
+
+def wire_size(value):
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _excerpt(value, limit):
+    """Bound variable-width stream fields while preserving their JSON types."""
+    if isinstance(value, str):
+        return value[:limit]
+    if isinstance(value, list):
+        return [_excerpt(entry, limit) for entry in value[:limit]]
+    if isinstance(value, dict):
+        return {key: _excerpt(entry, limit) for key, entry in value.items()}
+    return value
+
+
+def _fit_stream_item(item, budget):
+    if wire_size(item) <= budget:
+        return item
+    # Keep the timeline entry even when its output needs a smaller excerpt.
+    def clipped(limit):
+        meta = _excerpt(item["meta"], limit)
+        meta["truncated"] = True
+        if item["kind"] == "command" and len(item["body"]) > limit:
+            meta["output_truncated"] = True
+        return {**item, "body": item["body"][:limit], "title": item["title"][:max(32, limit)], "meta": meta}
+
+    lo, hi = 0, budget
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if wire_size(clipped(mid)) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return clipped(lo)
+
+
+def fit_detail_budget(snapshot, detail, content):
+    # Reserve space for the MCP envelope. Count encoded JSON, including escaped
+    # control characters and multibyte text, rather than estimating from characters.
+    available = 950_000 - wire_size(snapshot) - wire_size(content)
+    if wire_size(detail) <= available:
+        return
+    messages = detail["messages"]
+    prompts = detail["prompts"]
+    fixed = wire_size({**detail, "messages": [], "prompts": [{**p, "text": ""} for p in prompts]})
+    remaining = max(0, available - fixed - 1024)
+    prompt_budget = remaining // (2 if messages else 1)
+    for index, prompt in enumerate(prompts):
+        text = prompt["text"]
+        budget = prompt_budget // (len(prompts) - index)
+        if wire_size(text) > budget:
+            lo, hi = 0, len(text)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if wire_size(text[:mid]) <= budget:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            prompt.update(text=text[:lo], truncated=True)
+        size = wire_size(prompt["text"])
+        prompt_budget -= size
+        remaining -= size
+    # Allocate small entries first so unused space goes to longer outputs.
+    for n, index in enumerate(sorted(range(len(messages)), key=lambda i: wire_size(messages[i]))):
+        messages[index] = _fit_stream_item(messages[index], max(0, remaining // (len(messages) - n) - 1))
+        remaining -= wire_size(messages[index]) + 1
+    if wire_size(detail) > available:
+        raise ValueError("Session metadata exceeds the monitor response limit. The full records are in the task directory.")
 
 
 def list_task_metadata() -> List[Tuple[Path, Dict[str, Any], bool]]:
@@ -1155,11 +1504,16 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
     limit = task_limit(args)
     selected_id = sanitize_task_id(str(args["task_id"])) if args.get("task_id") else None
     tasks = list_task_metadata()
-    tasks.sort(key=lambda item: (item[2], str(item[1].get("updated_at") or "")), reverse=True)
+    tasks.sort(key=lambda item: (
+        item[1].get("task_id", item[0].name) == selected_id,
+        item[2],
+        str(item[1].get("finished_at") or item[1].get("updated_at") or item[1].get("created_at") or ""),
+    ), reverse=True)
     records = telemetry.load_or_build_records(STATE_ROOT)
     by_task_id = {record["task_id"]: record for record in records}
     summaries = []
     selected = None
+    detail = None
     for index, (task_dir, meta, alive) in enumerate(tasks):
         task_id = meta.get("task_id", task_dir.name)
         is_selected = task_id == selected_id
@@ -1169,6 +1523,8 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
                 summaries.append(summary)
             if is_selected:
                 selected = summary
+                if args.get("include_detail"):
+                    detail = build_task_detail(task_dir, meta, alive, selected, by_task_id.get(task_id))
 
     active_count = sum(alive for _, _, alive in tasks)
     result = {
@@ -1189,6 +1545,9 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
         lines.append(
             f"[{task['status']}] {task['task_id']} ({format_model_tag(task)}){duration} · {activity}"
         )
+    if detail is not None:
+        fit_detail_budget(result, detail, "\n".join(lines))
+        result["task_detail"] = detail
     return result, "\n".join(lines)
 
 
@@ -1325,6 +1684,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "Absolute path to an existing Markdown specification file. Provide either spec or spec_file.",
                 },
+                "title": {"type": "string", "description": "Optional concise human-readable title for this task."},
                 "task_id": {
                     "type": "string",
                     "description": "Optional short unique slug (e.g. 'feat-auth-jwt'). Auto-generated if omitted.",
@@ -1505,6 +1865,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "properties": {
                 "task_id": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 0, "default": 20},
+                "include_detail": {"type": "boolean", "default": False},
             },
         },
     },

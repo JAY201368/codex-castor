@@ -5,207 +5,310 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Codex Castor Monitor</title>
 <style>
-  :root {
-    color-scheme: light;
-    --paper: #f4e8cd;
-    --card: #fcf2dc;
-    --ink: #241912;
-    --muted: #604b39;
-    --line: #b9a480;
-    --accent: #274c5b;
-    --rubric: #8f2d22;
-    --mono: ui-monospace, "SF Mono", Consolas, monospace;
-    background: var(--color-background-primary, var(--paper));
-    color: var(--color-text-primary, var(--ink));
-    font: 14px/1.45 var(--font-sans, system-ui, sans-serif);
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --paper: #241f1d;
-    --card: #2d2926;
-    --ink: #f2e7d5;
-    --muted: #d0bca6;
-    --line: #675649;
-    --accent: #9bcfdf;
-    --rubric: #f3aa99;
-  }
-  * { box-sizing: border-box; }
-  [hidden] { display: none !important; }
-  body { margin: 0; }
-  main { max-width: 1280px; margin-inline: auto; padding: clamp(14px, 3vw, 40px); }
-  h1, h2, h3, p { margin: 0; }
-  .masthead {
-    border-top: 3px double var(--color-border-primary, var(--line));
-    border-bottom: 1px solid var(--color-border-primary, var(--line));
-    padding: 12px 0 13px;
-  }
-  .masthead, .toolbar, .controls, .task-head, .model, .details {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 7px 11px;
-  }
-  .masthead, .toolbar { justify-content: space-between; }
-  h1 { font: 600 clamp(1.65rem, 4vw, 2.4rem)/1 Georgia, serif; letter-spacing: -.035em; }
-  .counts, .stamp, .clock, .badge, .details, .feed time, .round { font-family: var(--mono); }
-  .counts { color: var(--color-text-secondary, var(--muted)); font-size: .8rem; }
-  .counts strong { color: var(--accent); }
-  .toolbar { padding-block: 12px; }
-  button {
-    min-height: 32px; padding: 4px 9px; cursor: pointer; border-radius: 4px;
-    border: 1px solid var(--color-border-primary, var(--line));
-    background: var(--color-background-secondary, var(--card)); color: inherit; font: inherit;
-    font-size: .78rem; font-weight: 600;
-  }
-  button:hover { border-color: var(--accent); color: var(--accent); }
-  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  button:disabled, button[aria-disabled="true"] { opacity: .6; cursor: default; }
-  .views { display: flex; gap: 4px; margin-inline-end: 6px; }
-  .views button[aria-pressed="true"] { background: var(--accent); color: var(--paper); }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #notice { margin: 0 0 12px; font-size: .83rem; color: var(--rubric); }
-  .section + .section { margin-top: 22px; }
-  .section h2 {
-    font-size: .72rem; text-transform: uppercase; letter-spacing: .105em; margin-bottom: 8px;
-    color: var(--color-text-secondary, var(--muted)); font-weight: 700;
-  }
-  .grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
-  .task {
-    min-width: 0; align-self: start; overflow-wrap: anywhere; padding: 13px;
-    background: var(--color-background-secondary, var(--card));
-    border: 1px solid var(--color-border-primary, var(--line)); border-radius: 6px;
-    box-shadow: 0 1px 2px #20140d16; border-inline-start: 3px solid var(--color-border-primary, var(--line));
-  }
-  .task.is-live { border-inline-start-color: var(--accent); }
-  .task-head { flex-wrap: nowrap; gap: 7px; }
-  .task-head h3 { flex: 1; min-width: 0; font-size: 1rem; line-height: 1.2; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; color: var(--muted); }
-  .is-live .dot { color: var(--accent); animation: pulse 2.4s ease-out infinite; }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 20%, transparent); } }
-  .round { color: var(--color-text-secondary, var(--muted)); font-size: .74rem; }
-  .clock { font-size: .87rem; color: var(--accent); white-space: nowrap; font-weight: 700; }
-  .model { gap: 5px; margin-top: 10px; }
-  .badge, .stamp {
-    padding: 2px 5px; border-radius: 3px; border: 1px solid var(--color-border-primary, var(--line));
-    font-size: .72rem; color: var(--color-text-secondary, var(--muted));
-  }
-  .model-value { font-weight: 700; color: var(--accent); }
-  .override, .cancel { color: var(--rubric); }
-  .task-summary { margin-top: 8px; font-size: .85rem; }
-  .details {
-    margin-top: 9px; justify-content: space-between; align-items: flex-start;
-    gap: 3px 8px; font-size: .75rem; color: var(--color-text-secondary, var(--muted));
-  }
-  .activity {
-    margin-top: 9px; padding: 7px 8px; border-inline-start: 2px solid var(--accent);
-    background: var(--color-background-primary, var(--paper)); font-size: .84rem;
-  }
-  .activity strong { display: block; color: var(--accent); font-size: .74rem; margin-bottom: 2px; }
-  .feed { margin-top: 9px; font-size: .8rem; }
-  .feed summary { width: fit-content; cursor: pointer; font-weight: 650; }
-  .feed ol { padding: 0; margin: 5px 0 0; list-style: none; }
-  .feed li { display: grid; grid-template-columns: 8ch minmax(0, 1fr); gap: 7px; padding: 4px 0; }
-  .feed li + li { border-top: 1px dotted var(--color-border-primary, var(--line)); }
-  .feed time { color: var(--color-text-secondary, var(--muted)); font-size: .71rem; }
-  .task-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
-  .state-label { font-size: .75rem; text-transform: capitalize; color: var(--color-text-secondary, var(--muted)); }
-  .cancel[aria-pressed="true"] { border-color: var(--rubric); color: var(--rubric); }
-  .empty { padding: 20px 12px; text-align: center; color: var(--color-text-secondary, var(--muted)); }
-  .feedback-form {
-    display: grid; gap: 6px; margin-top: 10px; padding-top: 9px;
-    border-top: 1px dotted var(--color-border-primary, var(--line));
-  }
-  .feedback-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 7px; }
-  .feedback-stars { display: inline-flex; gap: 3px; }
-  .feedback-stars button { min-width: 26px; padding: 0 3px; font-size: 1.05rem; }
-  .feedback-form :is(input, select) {
-    min-height: 32px; min-width: 0; padding: 4px 6px; color: inherit;
-    border: 1px solid var(--color-border-primary, var(--line)); border-radius: 4px;
-    background: var(--color-background-primary, var(--paper)); font: inherit; font-size: .78rem;
-  }
-  .feedback-form input { flex: 1; }
-  .feedback-form input::placeholder { color: var(--color-text-secondary, var(--muted)); }
-  .feedback-status, .first-reply, .export-hint {
-    color: var(--color-text-secondary, var(--muted)); font-size: .75rem;
-  }
-  .feedback-status[data-error="true"] { color: var(--rubric); }
-  .kpis {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px 16px;
-    margin: 0 0 22px; padding: 12px 0; border-block: 1px solid var(--color-border-primary, var(--line));
-  }
-  .kpis dt { color: var(--color-text-secondary, var(--muted)); font-size: .76rem; }
-  .kpis dd { margin: 3px 0 0; color: var(--accent); font: 700 1.1rem/1.2 var(--mono); }
-  .table-scroll { overflow-x: auto; }
-  .analytics-table { width: 100%; border-collapse: collapse; font-size: .82rem; white-space: nowrap; }
-  .analytics-table :is(th, td) {
-    padding: 9px 12px; text-align: start; border-bottom: 1px solid var(--color-border-primary, var(--line));
-  }
-  .analytics-table thead { background: var(--color-background-secondary, var(--card)); }
-  .analytics-table :is(th, td):nth-child(n+3) { text-align: end; font-variant-numeric: tabular-nums; }
-  .export-hint { margin-top: 14px; overflow-wrap: anywhere; }
-  .export-hint code { font-family: var(--mono); }
-  @media (min-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (min-width: 1120px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (min-width: 960px) {
-    #tasks:has(.section + .section) {
-      display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-      align-items: start; gap: 22px;
-    }
-    #tasks:has(.section + .section) .section + .section { margin-top: 0; }
-    #tasks:has(.section + .section) .grid { grid-template-columns: minmax(0, 1fr); }
-  }
-  @media (prefers-reduced-motion: reduce) { .is-live .dot { animation: none; } }
+:root {
+  color-scheme: light;
+  --fb-bg: #f8f9fb; --fb-surface: #fff; --fb-subtle: #f2f4f7;
+  --fb-text: #182336; --fb-text-2: #475569; --fb-text-3: #606d7f;
+  --fb-border: #d5dbe3; --fb-border-2: #e4e8ee;
+  --fb-accent: #2563eb; --fb-success: #15803d; --fb-warning: #b45309; --fb-danger: #dc2626;
+  --bg: var(--color-background-primary, var(--fb-bg));
+  --surface: var(--color-background-secondary, var(--fb-surface));
+  --subtle: var(--color-background-tertiary, var(--fb-subtle));
+  --text: var(--color-text-primary, var(--fb-text));
+  --secondary: var(--color-text-secondary, var(--fb-text-2));
+  --muted: var(--color-text-tertiary, var(--fb-text-3));
+  --border: var(--color-border-primary, var(--fb-border));
+  --line: var(--color-border-secondary, var(--fb-border-2));
+  --accent: var(--color-text-info, var(--fb-accent));
+  --success: var(--color-text-success, var(--fb-success));
+  --warning: var(--color-text-warning, var(--fb-warning));
+  --danger: var(--color-text-danger, var(--fb-danger));
+  --ring: var(--color-ring-primary, var(--accent));
+  --wash: color-mix(in srgb, var(--accent) 10%, transparent);
+  --good: color-mix(in srgb, var(--success) 10%, transparent);
+  --bad: color-mix(in srgb, var(--danger) 8%, transparent);
+  --warm: color-mix(in srgb, var(--warning) 10%, transparent);
+  --dots: radial-gradient(circle, color-mix(in srgb, var(--text) 4%, transparent) 1px, transparent 1px);
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --fb-bg: #12161d; --fb-surface: #1b2029; --fb-subtle: #242b36;
+  --fb-text: #ecf0f5; --fb-text-2: #bdc7d4; --fb-text-3: #9ca9ba;
+  --fb-border: #394351; --fb-border-2: #303946;
+  --fb-accent: #60a5fa; --fb-success: #4ade80; --fb-warning: #fbbf24; --fb-danger: #f87171;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.5; }
+main { max-width: 1560px; margin: auto; padding: 0 clamp(12px, 2.8vw, 40px) 32px; }
+h1, h2, h3, p, dl, dd, pre, blockquote { margin: 0; }
+h1 { font-size: 1.05rem; font-weight: 650; letter-spacing: -.035em; }
+h2 { font-size: 16px; letter-spacing: -.025em; font-weight: 650; }
+h3 { font-size: 13.5px; font-weight: 600; line-height: 1.38; }
+button, input, select { font: inherit; color: var(--text); }
+button, select, input { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+button { cursor: pointer; min-height: 28px; padding: 2px 9px; font-size: 12px; font-weight: 550; }
+button:hover, select:hover { border-color: var(--muted); }
+button:disabled { cursor: wait; opacity: .65; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+input { padding: 3px 8px; caret-color: var(--accent); }
+input::placeholder { color: var(--muted); }
+::selection { background: var(--wash); color: var(--text); }
+svg { flex: none; vertical-align: middle; }
+.mono, code, pre, time, .metric-value, td.numeric { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.masthead, .toolbar, .section-head, .row, .brand, .counts, .group, .status, .activity, .stars,
+.detail-bar, .title-row, .feedback-row, .chips, .stream-heading, .icon-button { display: flex; align-items: center; gap: 8px; }
+.masthead, .toolbar, .section-head { justify-content: space-between; }
+.masthead { min-height: 58px; border-bottom: 1px solid var(--line); background-image: var(--dots); background-size: 8px 8px; }
+.brand { gap: 9px; } .mark { color: var(--accent); }
+.counts { gap: 10px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.pill, .status { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 5px;
+  white-space: nowrap; flex: none;
+  background: var(--subtle); color: var(--secondary); font-size: 11px; font-weight: 550; line-height: 1.5; }
+.counts .status { padding: 8px 10px; border-radius: 20px; line-height: 1; }
+.running, .starting, .info { color: var(--accent); background-color: var(--wash); }
+.completed, .saved { color: var(--success); background-color: var(--good); }
+.failed, .error { color: var(--danger); background-color: var(--bad); }
+.override { color: var(--warning); background: var(--warm); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 100%; background: var(--muted); flex: none; }
+.dot.running, .dot.starting { background: var(--accent); animation: pulse 2s ease-in-out infinite; }
+.dot.completed { background: var(--success); } .dot.failed { background: var(--danger); }
+@keyframes pulse { 50% { opacity: .55; } }
+.toolbar { margin: 18px 0 22px; gap: 4px; }
+.group { gap: 2px; background: var(--subtle); padding: 3px; border-radius: 8px; width: fit-content; }
+.group button { border: 1px solid transparent; background: transparent; color: var(--secondary); }
+.group button[aria-pressed="true"] { background: var(--surface); border-color: var(--border); color: var(--text); box-shadow: 0 1px 3px #0001; }
+.primary button { min-height: 32px; font-size: 13px; padding-inline: 14px; }
+.small-group { padding: 2px; } .small-group button { font-size: 11.5px; min-height: 22px; padding: 1px 7px; }
+#filters { background: transparent; padding: 0; gap: 0; }
+#filters button { background: var(--subtle); min-height: 26px; padding: 6px 9px; line-height: 12px; }
+#filters button:first-child { border-radius: 6px 0 0 6px; }
+#filters button:last-child { border-radius: 0 6px 6px 0; }
+#filters button[aria-pressed="true"] { background: var(--surface); }
+.section { margin-top: 22px; }
+.section-head { min-height: 25px; margin-bottom: 10px; gap: 10px; flex-wrap: wrap; }
+.section-head .row { gap: 7px; }
+.card-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.task-card, .panel, .kpis > div, .empty { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; }
+.task-card { min-width: 0; height: 272px; padding: 14px 15px; display: grid;
+  grid-template-rows: 38px 22px 38px 34px minmax(0, 1fr); gap: 8px; cursor: pointer;
+  transition: border-color .16s, box-shadow .16s; }
+.task-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 4px 12px #0000000d; }
+.title-row { align-items: start; min-width: 0; gap: 7px; }
+.title-row .dot { margin-top: 6px; }
+.title-row h3, .preview-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.title-row h3 { flex: 1; }
+.card-meta, .card-meta > span { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.card-meta { gap: 10px; white-space: nowrap; color: var(--secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.card-meta .project-meta { flex: 1; }
+.project-meta span, .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-group + .project-group { margin-top: 8px; }
+.project-toggle { width: 100%; display: flex; align-items: center; gap: 8px; padding: 11px 12px;
+  text-align: left; border-radius: 8px; font-size: 13px; }
+.project-name { font-weight: 600; }
+.project-info { margin-left: auto; color: var(--muted); white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
+.project-toggle svg { color: var(--secondary); }
+.project-chevron { transition: transform 160ms ease-out; }
+.project-toggle[aria-expanded="true"] .project-chevron { transform: rotate(90deg); }
+.project-group .card-grid { margin: 10px 0 16px; }
+.chevron { color: var(--muted); transition: transform .16s; }
+.task-card:hover .chevron { transform: translateX(2px); color: var(--accent); }
+.preview-text { align-self: start; font-size: 12.5px; line-height: 1.48; color: var(--secondary); }
+.activity { min-width: 0; background: var(--subtle); border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; color: var(--secondary); gap: 7px; }
+.activity-text { font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity .pill { font-size: 10px; padding: 1px 5px; }
+.feedback-form { display: grid; align-content: start; gap: 7px; }
+.task-card .feedback-form { padding-top: 10px; border-top: 1px solid var(--line); cursor: default; }
+.feedback-row { gap: 5px; min-width: 0; }
+.stars { gap: 0; } .star { width: 24px; min-height: 24px; height: 24px; padding: 0; background: transparent; border: 0; color: var(--muted); }
+.star:hover, .star.filled { color: var(--warning); }
+.feedback-row select, .cancel { height: 26px; min-height: 26px; font-size: 11.5px; }
+.feedback-row select { min-width: 0; width: 92px; margin-left: auto; }
+.feedback-row input { flex: 1; min-width: 0; height: 28px; font-size: 12px; }
+.save { min-width: 61px; height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.save.error, .cancel.confirm { border-color: var(--danger); color: var(--danger); }
+.empty { padding: 28px; color: var(--secondary); background-image: var(--dots); background-size: 8px 8px; }
+.notice { padding: 8px 12px; color: var(--danger); background: var(--bad); border-radius: 6px; }
+body.overlay-open { overflow: hidden; min-height: 100dvh; }
+.sheet-backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 42%, rgba(15,23,42,.16));
+  -webkit-backdrop-filter: blur(10px) saturate(1.15); backdrop-filter: blur(10px) saturate(1.15); }
+.level-2 { z-index: 40; padding: clamp(12px, 2.2vw, 24px); }
+.level-3 { z-index: 60; padding: clamp(20px, 3.2vw, 38px); }
+.sheet-panel { width: 100%; height: 100%; max-width: 1460px; display: flex; flex-direction: column;
+  overflow: hidden; background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(15,23,42,.18); animation: sheet-in 160ms ease-out; }
+.level-3 .sheet-panel { max-width: 1432px; }
+:root[data-theme="dark"] .sheet-backdrop { background: rgba(6,9,15,.56);
+  -webkit-backdrop-filter: blur(12px) saturate(1.1); backdrop-filter: blur(12px) saturate(1.1); }
+:root[data-theme="dark"] .sheet-panel { box-shadow: 0 22px 56px rgba(0,0,0,.55); }
+@keyframes sheet-in { from { opacity: .3; transform: translateY(5px); } }
+.sheet-header { flex: none; padding: 12px clamp(10px, 2vw, 24px); background: var(--surface); border-bottom: 1px solid var(--line); }
+.sheet-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 clamp(10px, 2vw, 24px) 16px; }
+.level-3 .sheet-body { padding-top: 16px; }
+.detail-bar { align-items: start; flex-wrap: wrap; }
+.reading-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.detail-name { flex: 1; min-width: 120px; overflow-wrap: anywhere; }
+.detail-name h2 { font-size: 18px; } .detail-name .row { flex-wrap: wrap; }
+.secondary { color: var(--secondary); } .muted { color: var(--muted); font-size: 12px; }
+.panel { padding: 16px; margin-top: 12px; min-width: 0; }
+.config { display: grid; grid-template-columns: auto minmax(0,1fr); font-size: 12px; }
+.config dt, .config dd { border-top: 1px solid var(--line); padding: 8px; overflow-wrap: anywhere; }
+.config dt { color: var(--secondary); padding-left: 0; }
+.chips { flex-wrap: wrap; gap: 5px; min-width: 0; } .chips > * { overflow-wrap: anywhere; }
+.chips > .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.metrics, .kpis { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.metric, .kpis > div { padding: 11px; min-width: 0; background: var(--subtle); border-radius: 7px; }
+.metric dt, .kpis dt, .breakdown dt { color: var(--secondary); font-size: 11.5px; }
+.metric-value, .kpis dd { display: block; font-size: 17px; letter-spacing: -.035em; margin: 3px 0; }
+.breakdown { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 12px; }
+.breakdown dd { font-family: var(--mono); }
+.banner { margin-top: 12px; padding: 8px; background: var(--wash); border-radius: 6px; overflow-wrap: anywhere; }
+.table-scroll { overflow-x: auto; margin-top: 12px; }
+table { border-collapse: collapse; text-align: left; width: 100%; font-variant-numeric: tabular-nums; font-size: 12px; }
+th, td { padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap; } th { color: var(--secondary); font-weight: 550; }
+.prompt-surface { height: 280px; overflow: auto; padding: 14px; background: var(--subtle); border-radius: 7px; }
+.stream-viewport { height: 360px; overflow: auto; padding-right: 4px; }
+.full-prompt { font-size: 14px; }
+.full-prompt .prose > pre { max-height: none; }
+.sheet-header .prompt-tabs { margin: 10px 0 0; flex-wrap: nowrap; max-width: 100%; overflow-x: auto; }
+.sheet-header .prompt-tabs button { flex: none; }
+.prompt-tabs { margin-bottom: 8px; flex-wrap: wrap; }
+.prose { line-height: 1.6; overflow-wrap: anywhere; }
+.prose > * { max-width: 78ch; } .prose > * + * { margin-top: .65em; }
+.prose h3 { font-size: 16px; } .prose h4, .prose h5 { margin-bottom: 0; font-size: 14px; }
+.prose ul, .prose ol { padding-left: 21px; margin-bottom: 0; }
+.prose blockquote { padding-left: 10px; border-left: 2px solid var(--border); color: var(--secondary); }
+.prose hr { border: 0; border-top: 1px solid var(--border); margin-inline: 0; }
+code, pre { font-size: .94em; } pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prose code, .output { background: var(--subtle); border-radius: 4px; }
+.prose code { padding: 1px 3px; } .output { padding: 9px; max-height: 240px; overflow: auto; }
+.prompt-surface .prose code, .prompt-surface .output { background: var(--surface); border: 1px solid var(--line); }
+.prompt-surface .output code { background: transparent; border: 0; padding: 0; }
+.skeleton { height: 42px; background: var(--subtle); border-radius: 6px; }
+.stream { display: grid; gap: 7px; }
+.event { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; }
+.stream-heading { min-width: 0; overflow-wrap: break-word; }
+.stream-heading > strong { flex: 1; min-width: 0; }
+.stream-heading time { font-size: 11px; color: var(--muted); }
+.event summary { cursor: pointer; }
+.event summary .stream-heading { display: inline-flex; flex: 1; width: calc(100% - 20px); max-width: calc(100% - 20px); vertical-align: middle; }
+.stream-heading > .command-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stream-heading .exit-code { margin-left: auto; }
+.stream-icon { color: var(--muted); }
+.stream-icon.file_change, .stream-icon.search { color: color-mix(in srgb, var(--accent) 42%, var(--secondary)); }
+.stream-icon.report, .stream-icon.command-completed { color: var(--success); }
+.stream-icon.error, .stream-icon.command-failed { color: var(--danger); }
+.event .prose, .event .chips, .event pre, .report-field, .event details { margin-top: 7px; }
+.history-hint { margin-bottom: 10px; }
+.report { background: var(--good); border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
+.milestone { font-size: 11.5px; color: var(--secondary); display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.milestone::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.reply { margin: 7px 0; display: flex; gap: 8px; align-items: baseline; overflow-wrap: anywhere; }
+#analytics .kpis > div { background: var(--surface); } .export-hint { color: var(--muted); margin-top: 14px; overflow-wrap: anywhere; font-size: 11.5px; }
+@media (min-width: 660px) {
+  .card-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .kpis { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}
+@media (min-width: 720px) {
+  .config { grid-template-columns: auto minmax(0,1fr) auto minmax(0,1fr); }
+  .metrics { grid-template-columns: repeat(4,minmax(0,1fr)); }
+}
+@media (min-width: 1040px) {
+  .card-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .kpis { grid-template-columns: repeat(6,minmax(0,1fr)); }
+}
+@media (max-width: 360px) {
+  .masthead .brand, .counts { gap: 4px; }
+  .task-card { padding-inline: 10px; } .cancel { padding-inline: 5px; }
+  .panel { padding: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
-<main>
+<main id="home-layer">
   <header class="masthead">
-    <h1>Codex Castor Monitor</h1>
-    <div class="counts"><strong id="active">0 active</strong> · <span id="total">0 total</span></div>
-  </header>
-  <div class="toolbar">
-    <div class="controls" aria-label="Monitor controls">
-      <div class="views" role="group" aria-label="View">
-        <button type="button" id="show-tasks" aria-controls="tasks" aria-pressed="true">Tasks</button>
-        <button type="button" id="show-analytics" aria-controls="analytics" aria-pressed="false">Analytics</button>
-      </div>
-      <button type="button" id="filter" aria-pressed="false">Active only</button>
-      <button type="button" id="pause" aria-pressed="false">Pause</button>
-      <button type="button" id="refresh">Refresh</button>
+    <div class="brand">
+      <svg class="mark" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 18Q13 23 21 5" fill="none" stroke="currentColor" stroke-width="1.1"/>
+        <path d="m9 4 1.6 4.4L15 10l-4.4 1.6L9 16l-1.6-4.4L3 10l4.4-1.6zM19 1l.9 2.6L22.5 4.5l-2.6.9L19 8l-.9-2.6-2.6-.9 2.6-.9z" fill="currentColor"/>
+      </svg>
+      <h1>Codex Castor</h1><span id="preview" class="pill" hidden>Preview</span>
     </div>
-    <span class="stamp" id="preview" hidden>Preview mode</span>
+    <div class="counts"><span id="active-chip" class="status"><i id="active-dot" class="dot"></i><span id="active">0 active</span></span><span id="total">0 total</span></div>
+  </header>
+  <div class="toolbar" id="toolbar">
+    <div class="group primary" role="group" aria-label="View">
+      <button type="button" id="show-tasks" aria-pressed="true">Tasks</button>
+      <button type="button" id="show-analytics" aria-pressed="false">Analytics</button>
+    </div>
+    <div class="group small-group" id="filters" role="group" aria-label="Filter tasks">
+      <button type="button" id="all" aria-pressed="true">All</button>
+      <button type="button" id="active-only" aria-pressed="false">Active</button>
+    </div>
   </div>
-  <p id="notice" role="status" hidden></p>
-  <div id="tasks"></div>
+  <p id="notice" class="notice" role="status" hidden></p>
+  <div id="tasks">
+    <section id="live-section" class="section" hidden><div class="section-head"></div><div class="card-grid"></div></section>
+    <section id="project-section" class="section" hidden><div class="section-head"><h2>By Project</h2></div><div id="projects"></div></section>
+    <p id="task-empty" class="empty" hidden></p>
+  </div>
   <div id="analytics" hidden></div>
 </main>
+<div id="detail-layer" class="sheet-backdrop level-2" role="dialog" aria-modal="true" aria-label="Session details" hidden>
+  <div class="sheet-panel">
+    <div id="detail-heading" class="sheet-header"></div>
+    <p class="notice" role="status" hidden></p>
+    <div id="detail" class="sheet-body"></div>
+  </div>
+</div>
+<div id="sub-layer" class="sheet-backdrop level-3" role="dialog" aria-modal="true" aria-labelledby="sub-title" hidden>
+  <div class="sheet-panel">
+    <div id="sub-heading" class="sheet-header"></div>
+    <p class="notice" role="status" hidden></p>
+    <div id="sub-body" class="sheet-body" tabindex="0"></div>
+  </div>
+</div>
 <script>
 "use strict";
-
 const protocol = "2026-01-26";
 const parentWindow = window.parent;
 const preview = parentWindow === window || new URLSearchParams(window.location.search).get("demo") === "1";
 const byId = id => document.getElementById(id);
 const tasksView = byId("tasks");
 const analyticsView = byId("analytics");
-const refreshButton = byId("refresh");
 const pending = new Map();
-const feedState = new Map();
 const feedbackDrafts = new Map();
 const savingFeedback = new Set();
 const feedbackMessages = new Map();
-const clocks = [];
+const detailView = byId("detail");
+const homeLayer = byId("home-layer");
+const detailLayer = byId("detail-layer");
+const subLayer = byId("sub-layer");
+const expandedProjects = new Set();
+let subView = "";
+let detail = null;
+let detailState;
+let listScroll = 0;
+const sectionKeys = new Map();
 let nextId = 2;
 let parentOrigin = "*";
 let ready = false;
 let disposed = false;
-let paused = false;
 let activeOnly = false;
 let selected = "";
+let missingSelected = false;
 let count = 0;
 let total = 0;
 let tasks = [];
 let analytics;
 let telemetryDir = "~/.gemini/codex-castor";
 let view = "tasks";
-let taskRenderPending = false;
 let confirmTask = null;
 let cancelling = null;
 let pollTimer;
@@ -251,70 +354,107 @@ function toolPayload(result) {
 }
 
 function showNotice(text) {
-  byId("notice").textContent = text;
-  byId("notice").hidden = !text;
+  for (const notice of document.querySelectorAll(".notice")) {
+    notice.textContent = text;
+    notice.hidden = !text;
+  }
 }
 
 function live(task) {
-  return (task.status === "running" || task.status === "starting") && task.alive !== false;
+  return !!task && (task.status === "running" || task.status === "starting") && task.alive !== false;
 }
 
 function sameRound(task, other) {
   return task.task_id === other?.task_id && task.round === other.round;
 }
 
-function setSnapshot(data) {
+function summaryDetail(task) {
+  const prompt = task.prompt_preview || task.task_summary;
+  const round = task.round || 1;
+  const kinds = {cmd_start: "command", cmd_done: "command", file: "file_change", message: "message",
+    search: "search", tool: "tool", thinking: "reasoning", error: "error"};
+  const messages = [];
+  for (const activity of task.recent_activities || []) {
+    const kind = kinds[activity.kind];
+    if (!kind) continue;
+    const raw = activity.text || "";
+    const exit = raw.match(/^✗\(rc=(-?\d+)\)/);
+    const content = (activity.report_summary || raw.replace(/^(?:✗\(rc=[^)]+\)|[▶✓✗✎💬🔎⚙💭⚠])\uFE0F?\s*/u, "")).trim();
+    if (!content || content === "turn.failed") continue;
+    if (kind === "error" && /is ignoring|--dangerously-bypass-hook-trust/.test(content)) continue;
+    const status = kind === "error" || raw.startsWith("✗") ? "failed" :
+      activity.kind === "cmd_start" ? (live(task) ? "running" : "info") : "completed";
+    const text = kind === "message" && content.startsWith("{") && !activity.report_summary ? "Assistant report" : content;
+    const title = {message: "Assistant", reasoning: "Reasoning", error: "Error"}[kind];
+    messages.push({round, kind, status, ts: activity.ts, title: title || text, body: title ? text : "",
+      meta: exit ? {exit_code: Number(exit[1])} : {}});
+  }
+  return {task_id: task.task_id, summary_only: true,
+    prompts: prompt ? [{round: 1, filename: "", text: prompt, truncated: true}] : [],
+    messages, total_stream_items: messages.length};
+}
+
+function setSnapshot(data, {detailOnly = false} = {}) {
   if (!data || !Array.isArray(data.tasks)) return false;
   const now = performance.now();
-  tasks = data.tasks.slice();
-  if (data.selected_task && !tasks.some(task => task.task_id === data.selected_task.task_id)) {
-    tasks.push(data.selected_task);
-  }
   const serverTime = Date.parse(data.server_time);
-  tasks = tasks.map(task => {
+  function withClock(task) {
     const start = Date.parse(task.round_started_at || task.created_at);
     const end = live(task) ? serverTime : Date.parse(task.finished_at || task.updated_at);
     const fallback = Number.isFinite(end - start) ? (end - start) / 1000 : 0;
     return {...task, receivedAt: now, elapsed: Math.max(0, task.elapsed_seconds ?? fallback)};
-  });
+  }
+  if (!detailOnly) tasks = data.tasks.map(withClock);
+  if (data.selected_task) {
+    const index = tasks.findIndex(task => task.task_id === data.selected_task.task_id);
+    const updated = withClock(data.selected_task);
+    if (index < 0) tasks.push(updated);
+    else tasks[index] = updated;
+  } else if (detailOnly && selected) {
+    tasks = tasks.filter(task => task.task_id !== selected);
+    detail = null;
+  }
   count = data.active_count ?? tasks.filter(live).length;
   total = data.total ?? tasks.length;
   analytics = data.analytics;
   telemetryDir = data.telemetry_dir || telemetryDir;
+  if (data.task_detail?.task_id === selected) detail = data.task_detail;
+  else if (detailOnly && data.selected_task?.task_id === selected) detail = summaryDetail(data.selected_task);
   receivedResult = true;
   if (!tasks.some(task => sameRound(task, confirmTask) && live(task))) confirmTask = null;
-  render(undefined, true);
+  if (selected && !detailOnly) renderTasks();
+  render();
   return true;
 }
 
 function schedule() {
   clearTimeout(pollTimer);
-  if (ready && !preview && !disposed && !paused && !refreshInFlight) {
-    pollTimer = setTimeout(refresh, count > 0 ? 2000 : 8000);
+  if (ready && !preview && !disposed && !refreshInFlight) {
+    pollTimer = setTimeout(refresh, count > 0 || live(selectedTask()) ? 1000 : 8000);
   }
 }
 
 async function refresh() {
-  if (preview) { render(); return; }
+  if (preview) { if (selectedTask()) detail = demoDetail(selectedTask()); render(); return; }
   if (!ready || disposed) return;
   if (refreshInFlight) { refreshQueued = true; return; }
   clearTimeout(pollTimer);
   refreshInFlight = true;
-  refreshButton.disabled = true;
   const requestGeneration = generation;
   try {
-    const args = selected ? {limit: 20, task_id: selected} : {limit: 20};
+    const args = selected ? {limit: 0, task_id: selected, include_detail: true} : {limit: 200};
     const result = await call("codex_monitor", args);
     if (disposed || requestGeneration !== generation) return;
-    if (result?.isError || !setSnapshot(toolPayload(result))) {
+    const data = toolPayload(result);
+    missingSelected = !!selected && !data?.selected_task;
+    if (result?.isError || !setSnapshot(data, {detailOnly: !!args.include_detail})) {
       throw new Error(result?.content?.[0]?.text || "Invalid monitor response");
     }
     showNotice("");
   } catch (error) {
-    if (!disposed && requestGeneration === generation) showNotice(`Refresh failed. ${error.message}`);
+    if (!disposed && requestGeneration === generation) showNotice(`Monitor update failed. ${error.message}`);
   } finally {
     refreshInFlight = false;
-    refreshButton.disabled = disposed;
     if (refreshQueued && !disposed) {
       refreshQueued = false;
       refresh();
@@ -331,58 +471,13 @@ function node(tag, className, text) {
   return element;
 }
 
-function badge(text, flavor = "") {
-  return node("span", `badge ${flavor}`, text);
-}
-
 function sourceLabel(source) {
   return ({runtime_rollout: "runtime", config_toml: "config", request_override: "override",
     requested: "override", user_config: "config", project_config: "config",
     previous_round: "previous round"})[source] || source || "unknown";
 }
 
-function modelStrip(task) {
-  const row = node("div", "model");
-  const model = task.effective_model ?? task.model;
-  const effort = task.effective_reasoning_effort ?? task.reasoning_effort;
-  const sources = [...new Set([sourceLabel(task.model_source), sourceLabel(task.reasoning_effort_source)])];
-  row.append(badge(model || "Unknown model", "model-value"), badge(effort || "Unknown effort", "model-value"),
-    badge(sources.join(" / ")));
-  const defaults = [];
-  if (model && task.config_model && model !== task.config_model) defaults.push(task.config_model);
-  if (effort && task.config_reasoning_effort && effort !== task.config_reasoning_effort) {
-    defaults.push(task.config_reasoning_effort);
-  }
-  if (defaults.length) row.append(badge(`≠ config: ${defaults.join(" · ")}`, "override"));
-  return row;
-}
-
-function feed(task) {
-  const activities = task.recent_activities ?? [];
-  if (!activities.length) return null;
-  const details = node("details", "feed");
-  details.open = feedState.get(task.task_id) ?? live(task);
-  details.dataset.feedTask = task.task_id;
-  details.addEventListener("toggle", () => {
-    if (details.isConnected) feedState.set(task.task_id, details.open);
-  });
-  details.append(node("summary", "", "Recent activity · UTC"));
-  const list = node("ol");
-  for (const entry of activities.slice(-8).reverse()) {
-    const item = node("li");
-    const date = new Date(entry.ts);
-    const stamp = node("time", "", entry.ts && Number.isFinite(date.getTime()) ? date.toISOString().slice(11, 19) : "–");
-    if (stamp.textContent !== "–") stamp.dateTime = date.toISOString();
-    item.append(stamp, node("span", "", entry.text || ""));
-    list.append(item);
-  }
-  details.append(list);
-  return details;
-}
-
 const feedbackVerdicts = ["accepted", "partial", "rework", "rejected", "abandoned"];
-const tokenParts = [["input_tokens", "input"], ["cached_input_tokens", "cached"],
-  ["output_tokens", "output"], ["reasoning_output_tokens", "reasoning"]];
 const number = (value, digits = 0) => value == null ? "—" :
   value.toLocaleString(undefined, {maximumFractionDigits: digits});
 const percent = value => value == null ? "—" : `${number(value * 100, 1)}%`;
@@ -392,268 +487,893 @@ function totalTokens(usage) {
   return usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
 }
 
-function usageBadge(task) {
-  const prior = task.total_usage;
-  const current = live(task) || !prior ? task.round_usage ?? task.usage : null;
-  if (!prior && !current) return null;
-  const total = (prior ? totalTokens(prior) : 0) + (current ? totalTokens(current) : 0);
-  const usage = node("span", "", `${number(total)} tokens`);
-  usage.title = tokenParts.map(([key, label]) =>
-    `${number((prior?.[key] ?? 0) + (current?.[key] ?? 0))} ${label}`).join(" · ");
-  usage.setAttribute("aria-label", `${number(total)} tokens · ${usage.title}`);
-  return usage;
+const cap = value => String(value || "unknown").replace(/^./, c => c.toUpperCase());
+const selectedTask = () => tasks.find(task => task.task_id === selected);
+const activityIcons = {command: "terminal", file: "file", file_change: "file", message: "message",
+  report: "sparkle", thinking: "sparkle", reasoning: "sparkle", error: "alert", search: "search", tool: "tool"};
+const paths = {
+  folder: "M3 6h6l2 2h10v11H3z",
+  maximize: "M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5",
+  star: "m12 3 2.8 5.8 6.4.9-4.6 4.5 1.1 6.3L12 17.5l-5.7 3 1.1-6.3-4.6-4.5 6.4-.9z",
+  "chevron-right": "m9 5 7 7-7 7", "arrow-left": "m11 5-7 7 7 7M4 12h16",
+  terminal: "M3 4h18v16H3zM6 8l4 4-4 4m7 0h4", file: "M5 3h9l5 5v13H5zM14 3v6h5",
+  message: "M3 4h18v13H9l-6 4zM7 8h10M7 12h7", search: "M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0zm-2 5 6 6",
+  tool: "m14 5 3 3 4-4a6 6 0 0 1-7 8l-8 8a2 2 0 0 1-3-3l8-8a6 6 0 0 1 6-7z",
+  sparkle: "m10 3 2 6 6 2-6 2-2 6-2-6-6-2 6-2zM19 2v5m-2.5-2.5h5",
+  check: "m4 12 5 5L20 6", "check-small": "m5 12 4 4L19 6",
+  alert: "m12 3 10 17H2zM12 9v4m0 3v.1", clock: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zm-9-5v5l3 2",
+  layers: "m12 3 10 5-10 5L2 8zM2 12l10 5 10-5M2 16l10 5 10-5", copy: "M8 8h12v13H8zM16 5V3H3v13h2",
+  stop: "M5 5h14v14H5z"
+};
+function icon(name, size = 15) {
+  const ns = document.querySelector(".mark").namespaceURI;
+  const svg = document.createElementNS(ns, "svg");
+  for (const [key, value] of Object.entries({viewBox: "0 0 24 24", width: size, height: size,
+    fill: name === "star-filled" ? "currentColor" : "none", stroke: "currentColor", "stroke-width": 1.75,
+    "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true"})) svg.setAttribute(key, value);
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", paths[name === "star-filled" ? "star" : name] || paths.layers);
+  svg.append(path);
+  return svg;
 }
-
-function feedbackForm(task) {
-  const id = task.task_id;
-  const feedback = task.feedback ?? {};
-  const draft = feedbackDrafts.get(id) ?? feedback;
-  const form = node("form", "feedback-form");
-  form.setAttribute("aria-label", `Feedback for ${id}`);
-  const ratingRow = node("div", "feedback-row");
-  const stars = node("div", "feedback-stars");
-  stars.setAttribute("role", "group");
-  stars.setAttribute("aria-label", "Rating");
-  const verdict = node("select");
-  verdict.setAttribute("aria-label", "Verdict");
-  verdict.add(new Option("Verdict", ""));
-  for (const value of feedbackVerdicts) verdict.add(new Option(value[0].toUpperCase() + value.slice(1), value));
-  verdict.value = draft.verdict ?? "";
-  ratingRow.append(stars, verdict);
-
-  const noteRow = node("div", "feedback-row");
-  const notes = node("input");
-  notes.type = "text";
-  notes.placeholder = "Quick feedback note…";
-  notes.setAttribute("aria-label", "Feedback note");
-  notes.value = draft.notes ?? "";
-  const save = node("button", "", "Save");
-  save.type = "submit";
-  noteRow.append(notes, save);
-  const status = node("p", "feedback-status");
-  status.setAttribute("role", "status");
-  let rating = draft.rating;
-
-  function updateForm() {
-    const busy = savingFeedback.has(id);
-    for (const star of stars.children) {
-      const value = Number(star.dataset.rating);
-      star.textContent = value <= rating ? "★" : "☆";
-      star.setAttribute("aria-pressed", String(value === rating));
-      star.setAttribute("aria-disabled", String(busy));
-    }
-    save.setAttribute("aria-disabled", String(busy));
-    const message = feedbackMessages.get(id);
-    status.textContent = message?.text ?? "";
-    status.hidden = !message;
-    status.dataset.error = String(message?.error ?? false);
-  }
-
-  function storeDraft() {
-    const values = {rating, verdict: verdict.value, notes: notes.value};
-    feedbackDrafts.set(id, values);
-    return values;
-  }
-
-  async function submit(nextRating = rating) {
-    if (savingFeedback.has(id)) return;
-    rating = nextRating;
-    const sent = storeDraft();
-    const args = {task_id: id, notes: sent.notes};
-    if (sent.rating != null) args.rating = sent.rating;
-    if (sent.verdict) args.verdict = sent.verdict;
-    savingFeedback.add(id);
-    feedbackMessages.set(id, {text: "Saving…"});
-    updateForm();
-    try {
-      const {task_id, ...changes} = args;
-      let saved = {...feedback, ...changes};
-      if (!preview) {
-        const result = await call("codex_feedback", args);
-        const payload = toolPayload(result);
-        if (result?.isError || !payload?.feedback) {
-          throw new Error(payload?.error || "Could not save feedback");
-        }
-        saved = payload.feedback;
-      }
-      tasks = tasks.map(item => item.task_id === id ? {...item, feedback: saved} : item);
-      if (feedbackDrafts.get(id) === sent) {
-        feedbackDrafts.delete(id);
-        rating = saved.rating;
-        verdict.value = saved.verdict ?? "";
-        notes.value = saved.notes ?? "";
-      }
-      const message = {text: "Feedback saved."};
-      feedbackMessages.set(id, message);
-      setTimeout(() => {
-        if (feedbackMessages.get(id) === message) {
-          feedbackMessages.delete(id);
-          updateForm();
-          if (!form.isConnected) render(undefined, true);
-        }
-      }, 3000);
-      if (preview) {
-        analytics = demoAnalytics(tasks);
-        if (view === "analytics") renderAnalytics();
-      } else {
-        generation++;
-        refresh();
-      }
-    } catch (error) {
-      feedbackMessages.set(id, {text: `Save failed. ${error.message}`, error: true});
-    } finally {
-      savingFeedback.delete(id);
-      updateForm();
-      if (!form.isConnected) render(undefined, true);
-    }
-  }
-
-  for (let value = 1; value <= 5; value++) {
-    const star = node("button");
-    star.type = "button";
-    star.dataset.rating = value;
-    star.setAttribute("aria-label", `${value} of 5 stars`);
-    star.addEventListener("click", () => submit(value));
-    stars.append(star);
-  }
-  notes.addEventListener("input", storeDraft);
-  verdict.addEventListener("change", storeDraft);
-  form.addEventListener("submit", event => {
-    event.preventDefault();
-    submit();
-  });
-  form.append(ratingRow, noteRow, status);
-  const first = (feedback.user_first_prompts ?? []).slice().sort((a, b) =>
-    (b.recorded_at ?? "").localeCompare(a.recorded_at ?? "") || b.round - a.round)[0];
-  if (first?.prompt) {
-    const text = first.prompt.replace(/\s+/g, " ").trim();
-    const reply = node("p", "first-reply", `First reply · “${text.length > 150 ? text.slice(0, 149) + "…" : text}”`);
-    reply.title = first.prompt;
-    form.append(reply);
-  }
-  updateForm();
-  return form;
+function button(label, action, cls = "") {
+  const b = node("button", cls, label);
+  b.type = "button";
+  b.addEventListener("click", action);
+  return b;
 }
-
+function pressed(b, yes) { b.setAttribute("aria-pressed", String(yes)); }
+function statusBadge(status) {
+  const pill = node("span", "status " + status);
+  pill.append(node("i", "dot " + status), cap(status));
+  return pill;
+}
+function clockFor(task, base) {
+  const el = node("time", "mono");
+  el.dataset.clock = (base ?? task.elapsed ?? 0) - (task.receivedAt ?? performance.now()) / 1000;
+  return el;
+}
+function tick() {
+  for (const el of document.querySelectorAll("[data-clock]")) {
+    const s = Math.max(0, Math.floor(Number(el.dataset.clock) + performance.now() / 1000));
+    const digits = [Math.floor(s / 60) % 60, s % 60];
+    if (s >= 3600) digits.unshift(Math.floor(s / 3600));
+    el.textContent = digits.map(n => String(n).padStart(2, "0")).join(":");
+  }
+}
+function switchView(next, id = "") {
+  const previous = selected;
+  if (view === "tasks" && next === "detail") listScroll = window.scrollY;
+  view = next;
+  selected = id;
+  subView = "";
+  generation++;
+  confirmTask = null;
+  detail = null;
+  missingSelected = false;
+  sectionKeys.clear();
+  detailView.replaceChildren();
+  byId("detail-heading").replaceChildren();
+  byId("sub-heading").replaceChildren();
+  byId("sub-body").replaceChildren();
+  detailView.scrollTop = 0;
+  detailState = {round: null, raw: false, filter: "All", opened: new Set()};
+  render();
+  if (next === "detail") {
+    byId("back")?.focus({preventScroll: true});
+  } else if (previous) {
+    window.scrollTo(0, listScroll);
+    const card = [...tasksView.querySelectorAll(".task-card")].find(el => el.dataset.task === previous && el.offsetWidth);
+    const group = [...tasksView.querySelectorAll(".project-group")].find(el =>
+      el.dataset.project === projectName(tasks.find(t => t.task_id === previous) || {}));
+    (card || group?.firstChild || byId("show-tasks")).focus({preventScroll: true});
+  }
+  refresh();
+}
+function cancelButton(task, compact) {
+  const confirm = sameRound(task, confirmTask);
+  const b = button(confirm ? (compact ? "Confirm?" : "Confirm cancel?") : (compact ? "Cancel" : "Cancel task"),
+    () => cancel(task), "cancel" + (confirm ? " confirm" : ""));
+  b.disabled = cancelling === task.task_id;
+  b.dataset.focus = "cancel";
+  return b;
+}
 async function cancel(task) {
   if (!sameRound(task, confirmTask)) {
     confirmTask = task;
-    render(task.task_id);
+    render();
     return;
   }
+  if (cancelling) return;
   confirmTask = null;
   cancelling = task.task_id;
   render();
-  let errorMessage = "";
   try {
-    let cancelled = preview;
-    if (!preview) {
-      const result = await call("codex_cancel", {task_id: task.task_id});
-      const payload = toolPayload(result);
-      if (result?.isError || payload?.cancelled === false) {
-        throw new Error(payload?.message || result?.content?.[0]?.text || "Cancellation failed");
+    if (preview) {
+      const current = tasks.find(t => sameRound(t, task));
+      if (current && live(current)) {
+        current.elapsed_seconds = current.elapsed + (performance.now() - current.receivedAt) / 1000;
+        Object.assign(current, {status: "cancelled", alive: false, latest_activity: {kind: "status", text: "Task cancelled"},
+          total_duration_seconds: current.elapsed_seconds, finished_at: new Date().toISOString()});
+        count--;
+        analytics = demoAnalytics(tasks);
       }
-      cancelled = payload?.cancelled === true;
+    } else {
+      const result = await call("codex_cancel", {task_id: task.task_id});
+      if (result.isError || toolPayload(result)?.cancelled === false) {
+        throw new Error(toolPayload(result)?.message || "Cancellation failed");
+      }
     }
-    if (cancelled) {
-      tasks = tasks.map(item => {
-        if (!sameRound(item, task) || !live(item)) return item;
-        count = Math.max(0, count - 1);
-        return {
-          ...item, status: "cancelled", alive: false,
-          elapsed: item.elapsed + (performance.now() - item.receivedAt) / 1000,
-          current_activity: "Task cancelled",
-        };
-      });
-      if (preview) analytics = demoAnalytics(tasks);
-    }
-  } catch (error) {
-    errorMessage = `Cancel failed. ${error.message}`;
-  } finally {
-    if (disposed) return;
-    cancelling = null;
-    render();
     generation++;
-    if (!preview) await refresh();
-    if (errorMessage && !disposed) showNotice(errorMessage);
-  }
+    await refresh();
+  } catch (error) { showNotice(error.message); }
+  finally { cancelling = null; render(); }
 }
 
-function taskCard(task) {
-  const running = live(task);
-  const card = node("article", running ? "task is-live" : "task");
-  const head = node("div", "task-head");
-  const dot = node("span", "dot");
-  dot.setAttribute("aria-hidden", "true");
-  const clock = node("span", "clock");
-  clock.setAttribute("aria-label", "Total elapsed time");
-  clock.title = "Total elapsed time across rounds";
-  clocks.push({element: clock, task});
-  head.append(dot, node("h3", "", task.task_id), node("span", "round", `r${task.round ?? 1}`), clock);
-  const model = modelStrip(task);
-  const reworks = task.rework_count ?? 0;
-  if (reworks > 0) model.append(badge(`${reworks} rework${reworks === 1 ? "" : "s"}`, "override"));
-  card.append(head, model);
-  if (task.task_summary) card.append(node("p", "task-summary", task.task_summary));
-
-  const details = node("div", "details");
-  const location = task.worktree_branch || task.workdir?.split(/[/\\]/).filter(Boolean).pop();
-  if (location) {
-    const path = node("span", "", location);
-    path.title = task.workdir || location;
-    details.append(path);
+function feedbackForm(task, full = false) {
+  const id = task.task_id;
+  let feedback = task.feedback || {};
+  const draft = feedbackDrafts.get(id) || feedback;
+  let rating = draft.rating;
+  const form = node("form", "feedback-form");
+  form.setAttribute("aria-label", "Evaluation for " + (task.task_title || id));
+  form.addEventListener("click", event => event.stopPropagation());
+  if (!full) form.addEventListener("keydown", event => {
+    if (event.key === "Escape" && confirmTask) { confirmTask = null; render(); }
+    event.stopPropagation();
+  });
+  const top = node("div", "feedback-row");
+  const stars = node("div", "stars");
+  stars.setAttribute("role", "group");
+  stars.setAttribute("aria-label", "Rating");
+  const label = node("span", "muted");
+  const verdict = node("select");
+  verdict.setAttribute("aria-label", "Verdict");
+  verdict.add(new Option("Undecided", ""));
+  for (const v of feedbackVerdicts) verdict.add(new Option(cap(v), v));
+  verdict.value = draft.verdict || "";
+  if (feedback.verdict) verdict.options[0].disabled = true;
+  top.append(stars);
+  if (full) top.append(label);
+  top.append(verdict);
+  let cancelKey;
+  const bottom = node("div", "feedback-row");
+  const notes = node("input");
+  notes.placeholder = full ? "Evaluation notes…" : "Quick note…";
+  notes.setAttribute("aria-label", "Feedback note");
+  notes.value = draft.notes || "";
+  const save = node("button", "save");
+  save.type = "submit";
+  const status = node("span", "muted");
+  status.setAttribute("role", "status");
+  function edit() {
+    feedbackMessages.delete(id);
+    feedbackDrafts.set(id, {rating, verdict: verdict.value, notes: notes.value});
+    update();
   }
-  const usage = usageBadge(task);
-  if (usage) details.append(usage);
-  if (details.childElementCount) card.append(details);
-  const activity = task.current_activity || task.last_event;
-  if (activity || running) {
-    const block = node("div", "activity");
-    block.append(node("strong", "", running ? "Current activity" : "Final activity"),
-      node("span", "", activity || "Waiting for activity"));
-    card.append(block);
+  function update(current = task) {
+    task = current;
+    feedback = task.feedback || {};
+    const values = feedbackDrafts.get(id) || feedback;
+    rating = values.rating;
+    if (verdict.value !== (values.verdict || "")) verdict.value = values.verdict || "";
+    if (notes.value !== (values.notes || "")) notes.value = values.notes || "";
+    verdict.options[0].disabled = !!feedback.verdict;
+    const nextCancel = [task.round, live(task), sameRound(task, confirmTask), cancelling === id].join("-");
+    if (!full && cancelKey !== nextCancel) {
+      const prev = top.querySelector(".cancel");
+      const focused = prev && prev === document.activeElement;
+      prev?.remove();
+      if (live(task)) {
+        const control = cancelButton(task, true);
+        top.append(control);
+        if (focused) control.focus({preventScroll: true});
+      }
+      cancelKey = nextCancel;
+    }
+    const msg = feedbackMessages.get(id);
+    const busy = savingFeedback.has(id);
+    save.disabled = busy;
+    save.className = "save " + (msg?.error ? "error" : msg ? "saved" : "");
+    save.textContent = busy ? "Saving…" : msg?.error ? "Retry" : msg ? "Saved" : "Save";
+    if (msg && !msg.error && !busy) save.prepend(icon("check-small", 12));
+    save.title = msg?.text || "Save feedback";
+    status.textContent = busy ? "Saving…" : msg?.text || "";
+    label.textContent = rating ? rating + " / 5" : "Unrated";
+    for (const star of stars.children) {
+      const value = Number(star.dataset.rating);
+      star.classList.toggle("filled", value <= rating);
+      pressed(star, value === rating);
+      star.replaceChildren(icon(value <= rating ? "star-filled" : "star", 17));
+    }
   }
-  const recent = feed(task);
-  if (recent) card.append(recent);
-
-  const footer = node("div", "task-footer");
-  footer.append(node("span", "state-label", task.status || "Unknown"));
-  if (running) {
-    const armed = sameRound(task, confirmTask);
-    const button = node("button", "cancel", cancelling === task.task_id ? "Cancelling…" : armed ? "Confirm?" : "Cancel");
-    button.type = "button";
-    button.disabled = cancelling !== null;
-    button.dataset.cancelTask = task.task_id;
-    button.setAttribute("aria-pressed", String(armed));
-    button.setAttribute("aria-label", `${armed ? "Confirm cancellation of" : "Cancel"} ${task.task_id}`);
-    button.addEventListener("click", () => cancel(task));
+  for (let n = 1; n <= 5; n++) {
+    const star = button("", () => { rating = n; edit(); }, "star");
+    star.dataset.rating = n;
+    star.setAttribute("aria-label", n + " of 5 stars");
+    stars.append(star);
+  }
+  notes.addEventListener("input", edit);
+  verdict.addEventListener("change", edit);
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (savingFeedback.has(id)) return;
+    const sent = {rating, verdict: verdict.value, notes: notes.value};
+    feedbackDrafts.set(id, sent);
+    const args = {task_id: id, notes: sent.notes};
+    if (rating) args.rating = rating;
+    if (sent.verdict) args.verdict = sent.verdict;
+    savingFeedback.add(id);
+    update();
+    try {
+      let saved = {...feedback, ...sent};
+      if (!preview) {
+        const result = await call("codex_feedback", args);
+        saved = toolPayload(result)?.feedback;
+        if (result.isError || !saved) throw new Error(toolPayload(result)?.error || "Save failed");
+      }
+      tasks = tasks.map(t => t.task_id === id ? {...t, feedback: saved} : t);
+      if (feedbackDrafts.get(id) === sent) {
+        feedbackDrafts.delete(id);
+        const message = {text: "Feedback saved."};
+        feedbackMessages.set(id, message);
+        setTimeout(() => {
+          if (feedbackMessages.get(id) === message) { feedbackMessages.delete(id); render(); }
+        }, 3000);
+      }
+      if (preview) analytics = demoAnalytics(tasks);
+      generation++;
+      if (!preview) refresh();
+    } catch (error) { feedbackMessages.set(id, {text: error.message, error: true}); }
+    finally { savingFeedback.delete(id); update(); render(); }
+  });
+  bottom.append(notes, save);
+  form.append(top, bottom);
+  if (full) form.append(status);
+  form.update = update;
+  update();
+  return form;
+}
+function projectName(task) {
+  const workspace = task.requested_workdir || task.worktree?.repo_root || task.workdir || task.effective_workdir;
+  return task.project || workspace?.split(/[\\/]/).filter(Boolean).pop() || "Unassigned";
+}
+function taskTokens(task) {
+  const previous = task.total_usage;
+  const current = live(task) || !previous ? task.round_usage || task.usage : null;
+  if (!previous && !current) return null;
+  return (previous ? totalTokens(previous) : 0) + (current ? totalTokens(current) : 0);
+}
+function cardSeconds(task) {
+  if (live(task)) return (task.total_duration_seconds ?? 0) + task.elapsed;
+  return task.total_duration_seconds ?? task.elapsed_seconds;
+}
+function cardMetadata(task) {
+  const strip = node("div", "card-meta");
+  function metric(symbol, label, value, cls) {
+    const part = node("span", cls);
+    part.title = label;
+    part.append(icon(symbol, 12), value);
+    strip.append(part);
+  }
+  const project = projectName(task);
+  const tokens = taskTokens(task);
+  metric("folder", project, node("span", "", project), "project-meta");
+  metric("layers", "Total tokens", tokens == null ? "—" : number(tokens) + " tok");
+  const seconds = cardSeconds(task);
+  metric("clock", live(task) ? "Elapsed time" : "Duration", live(task) ? clockFor(task, seconds) : readableDuration(seconds));
+  return strip;
+}
+function taskCard(task, card) {
+  const id = task.task_id;
+  if (!card) {
+    card = node("article", "task-card");
+    card.dataset.task = id;
+    card.tabIndex = 0;
+    card.addEventListener("click", () => switchView("detail", id));
     card.addEventListener("keydown", event => {
-      if (event.key === "Escape" && sameRound(task, confirmTask)) {
-        confirmTask = null;
-        render(task.task_id);
+      if (event.target === card && ["Enter", " "].includes(event.key)) {
+        event.preventDefault(); switchView("detail", id);
       }
     });
-    footer.append(button);
+    card.append(feedbackForm(task));
   }
-  card.append(footer);
-  if (!running) card.append(feedbackForm(task));
+  card.setAttribute("aria-label", "Open session " + (task.task_title || id));
+  const header = node("div", "title-row");
+  const name = node("h3", "", task.task_title || id);
+  header.title = (task.task_title || id) + " · " + id;
+  header.append(node("i", "dot " + task.status), name);
+  if (task.round > 1) header.append(node("span", "pill", "r" + task.round));
+  const arrow = icon("chevron-right", 15);
+  arrow.classList.add("chevron");
+  header.append(arrow);
+  const activity = task.latest_activity || {kind: "status", text: cap(task.status)};
+  const strip = node("div", "activity");
+  const chip = live(task) ? "Live" : cap(task.status);
+  strip.title = activity.text;
+  strip.append(icon(activityIcons[activity.kind] || "clock", 13), node("span", "activity-text", activity.text),
+    node("span", "pill " + task.status, chip));
+  while (card.childElementCount > 1) card.firstElementChild.remove();
+  card.prepend(header, cardMetadata(task), node("p", "preview-text", task.prompt_preview || task.task_summary || "No prompt recorded."), strip);
   return card;
 }
+function groupTitle(name, count) {
+  const heading = node("div", "row");
+  heading.append(node("h2", "", name), node("span", "pill", String(count)));
+  return heading;
+}
+function renderCards(grid, members) {
+  const cards = new Map([...grid.children].map(card => [card.dataset.task, card]));
+  members.forEach((task, index) => {
+    let card = cards.get(task.task_id);
+    cards.delete(task.task_id);
+    const key = JSON.stringify([task.task_title, task.prompt_preview, task.task_summary, task.status,
+      task.round, task.latest_activity, projectName(task), taskTokens(task), !live(task) && cardSeconds(task)]);
+    if (!card || card.renderKey !== key) {
+      card = taskCard(task, card);
+      card.renderKey = key;
+    }
+    card.querySelector("form").update(task);
+    const clock = card.querySelector("[data-clock]");
+    if (clock) clock.dataset.clock = cardSeconds(task) - task.receivedAt / 1000;
+    if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
+  });
+  for (const card of cards.values()) card.remove();
+}
+const compactNumber = new Intl.NumberFormat(undefined, {notation: "compact", maximumFractionDigits: 1});
+const projectDate = new Intl.DateTimeFormat(undefined, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+const lastFinished = task => Date.parse(task.finished_at || task.updated_at || task.created_at) || 0;
+function projectGroup(name) {
+  const section = node("section", "project-group");
+  section.dataset.project = name;
+  const toggle = button("", () => {
+    if (expandedProjects.has(name)) expandedProjects.delete(name);
+    else expandedProjects.add(name);
+    render();
+  }, "project-toggle");
+  const arrow = icon("chevron-right", 14);
+  arrow.classList.add("project-chevron");
+  toggle.append(arrow, icon("folder", 16), node("span", "project-name", name),
+    node("span", "pill"), node("span", "project-info"));
+  toggle.title = name;
+  section.append(toggle, node("div", "card-grid"));
+  return section;
+}
+function renderTasks() {
+  const active = tasks.filter(live);
+  const activeSection = byId("live-section");
+  activeSection.hidden = !active.length;
+  activeSection.firstChild.replaceChildren(groupTitle("Active", active.length));
+  renderCards(activeSection.lastChild, active);
 
-function tick() {
-  const now = performance.now();
-  for (const {element, task} of clocks) {
-    const elapsed = live(task) ? (task.total_duration_seconds ?? 0) + task.elapsed + (now - task.receivedAt) / 1000 :
-      task.total_duration_seconds ?? task.elapsed;
-    const seconds = Number.isFinite(elapsed) ? Math.floor(elapsed) : 0;
-    const hours = Math.floor(seconds / 3600);
-    const digits = [Math.floor(seconds / 60) % 60, seconds % 60];
-    if (hours) digits.unshift(hours);
-    const text = digits.map(value => String(value).padStart(2, "0")).join(":");
-    if (element.textContent !== text) element.textContent = text;
+  const groups = new Map();
+  const settled = tasks.filter(task => !live(task)).sort((a,b) => lastFinished(b) - lastFinished(a));
+  for (const task of settled) {
+    const name = projectName(task);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(task);
+  }
+  byId("project-section").hidden = activeOnly || !groups.size;
+  if (!activeOnly) {
+    const container = byId("projects");
+    const previous = new Map([...container.children].map(el => [el.dataset.project, el]));
+    let index = 0;
+    for (const [name, members] of groups) {
+      const section = previous.get(name) || projectGroup(name);
+      previous.delete(name);
+      const toggle = section.firstChild;
+      const open = expandedProjects.has(name);
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.querySelector(".pill").textContent = members.length;
+      const known = members.map(taskTokens).filter(n => n != null);
+      const tokens = known.length ? compactNumber.format(known.reduce((a,b) => a + b, 0)) + " tok" : "— tok";
+      const latest = lastFinished(members[0]);
+      toggle.lastChild.textContent = latest ? tokens + " · " + projectDate.format(latest) : tokens;
+      const grid = section.lastChild;
+      grid.hidden = !open;
+      if (open) renderCards(grid, members);
+      if (container.children[index] !== section) container.insertBefore(section, container.children[index] || null);
+      index++;
+    }
+    for (const section of previous.values()) section.remove();
+  }
+  const empty = byId("task-empty");
+  empty.hidden = active.length > 0 || (!activeOnly && groups.size > 0);
+  if (!empty.hidden) empty.textContent = !receivedResult ? "Connecting to Codex Castor…" :
+    activeOnly ? "No active tasks." : "No sessions yet. Dispatched tasks will appear here.";
+}
+// Markdown stays text throughout. Only these block and inline elements are constructed.
+function inline(parent, text) {
+  const formatting = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((?:[^()\n]|\([^()\n]*\))*\)/g;
+  let offset = 0;
+  for (const match of text.matchAll(formatting)) {
+    parent.append(text.slice(offset, match.index));
+    const [, code, bold, label] = match;
+    if (code) parent.append(node("code", "", code));
+    else {
+      const element = node(bold ? "strong" : "span");
+      inline(element, bold || label);
+      parent.append(element);
+    }
+    offset = match.index + match[0].length;
+  }
+  parent.append(text.slice(offset));
+}
+function markdown(text) {
+  const root = node("div", "prose");
+  let list, paragraph, code, fence;
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const marker = line.match(/^\s*(`{3,}|~{3,})/);
+    if (code) {
+      if (marker && marker[1].startsWith(fence)) code = null;
+      else code.append(line + "\n");
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)/);
+    const bullet = line.match(/^\s*([-*+]|\d+\.)\s+(.+)/);
+    if (!bullet) list = null;
+    if (marker) {
+      code = node("code"); fence = marker[1];
+      const pre = node("pre", "output"); pre.append(code); root.append(pre);
+    } else if (!line.trim()) {
+      paragraph = null;
+    } else if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) root.append(node("hr"));
+    else if (heading) {
+      const h = node("h" + Math.min(6, heading[1].length + 2));
+      inline(h, heading[2]); root.append(h);
+    } else if (bullet) {
+      const tag = /^\d/.test(bullet[1]) ? "ol" : "ul";
+      if (list?.localName !== tag) {
+        list = node(tag);
+        if (tag === "ol") list.start = parseInt(bullet[1], 10);
+        root.append(list);
+      }
+      const li = node("li"); inline(li, bullet[2]); list.append(li);
+    } else if (/^\s*>/.test(line)) {
+      const quote = node("blockquote"); inline(quote, line.replace(/^\s*>\s?/, "")); root.append(quote);
+    } else {
+      if (!paragraph) { paragraph = node("p"); root.append(paragraph); }
+      else paragraph.append(" ");
+      inline(paragraph, line);
+      continue;
+    }
+    paragraph = null;
+  }
+  return root;
+}
+function panel(name) {
+  const section = node("section", "panel");
+  const head = node("div", "section-head");
+  head.append(node("h2", "", name));
+  section.append(head);
+  return section;
+}
+function localTime(value) {
+  const t = new Date(value);
+  return value && Number.isFinite(t.valueOf()) ? t.toLocaleString() : "—";
+}
+function readableDuration(s) {
+  if (s == null) return "—";
+  const seconds = Math.floor(s % 60);
+  const minutes = Math.floor(s / 60) % 60;
+  const hours = Math.floor(s / 3600);
+  return [hours ? hours + "h" : "", minutes || hours ? minutes + "m" : "", seconds + "s"].filter(Boolean).join(" ");
+}
+function dataTable(labels, rows) {
+  const wrap = node("div", "table-scroll");
+  const table = node("table");
+  const head = table.createTHead().insertRow();
+  labels.forEach(label => { const th = node("th", "", label); th.scope = "col"; head.append(th); });
+  const body = table.createTBody();
+  for (const values of rows) {
+    const row = body.insertRow();
+    values.forEach(v => row.append(node("td", "", v ?? "—")));
+  }
+  wrap.append(table);
+  return wrap;
+}
+function detailHeader(task) {
+  const header = node("header", "detail-bar");
+  const back = button("Back", () => switchView("tasks"), "icon-button");
+  back.dataset.focus = "back";
+  back.id = "back"; back.prepend(icon("arrow-left", 14));
+  header.append(back);
+  if (!task) {
+    header.append(node("p", "muted", missingSelected ? "Session not found · " + selected : "Loading session…"));
+    return header;
+  }
+  const name = node("div", "detail-name");
+  const sub = node("div", "row");
+  sub.append(node("code", "muted", task.task_id), statusBadge(task.status));
+  name.append(node("h2", "", task.task_title || task.task_id), sub);
+  header.append(name);
+  if (live(task)) header.append(cancelButton(task, false));
+  return header;
+}
+function configuration(c) {
+  const section = panel("Configuration");
+  const table = node("dl", "config");
+  function pair(label, value, cls) {
+    const dd = node("dd", cls);
+    dd.append(value || "—");
+    table.append(node("dt", "", label), dd);
+  }
+  function sourced(field) {
+    const row = node("div", "chips");
+    const value = c["effective_" + field] || c[field];
+    const configured = c["config_" + field];
+    row.append(value || "—");
+    if (c[field + "_source"]) row.append(node("span", "pill", sourceLabel(c[field + "_source"])));
+    if (configured && configured !== value) row.append(node("span", "pill override", "Override · config " + configured));
+    return row;
+  }
+  pair("Task ID", c.task_id, "mono"); pair("Session ID", c.session_id, "mono");
+  pair("Model", sourced("model")); pair("Reasoning effort", sourced("reasoning_effort"));
+  const workspace = node("div");
+  const dir = c.effective_workdir || c.requested_workdir || c.workdir || "";
+  workspace.append(c.project || dir.split("/").filter(Boolean).pop() || "—", node("div", "muted mono", dir));
+  if (c.requested_workdir && c.requested_workdir !== dir) workspace.append(node("div", "muted", "Requested · " + c.requested_workdir));
+  pair("Workspace", workspace);
+  const branch = node("div", "chips");
+  if (c.worktree_enabled || c.worktree?.enabled || c.worktree_branch) {
+    branch.append(node("span", "pill mono", c.worktree_branch || "Worktree"));
+    if (c.worktree_base_commit) branch.append(node("code", "muted", c.worktree_base_commit));
+  } else branch.append("Direct workspace");
+  pair("Worktree", branch);
+  const n = c.round_count || c.round || 1;
+  pair("Rounds", n === 1 ? "1 round" : n + " rounds (" + (n - 1) + (n === 2 ? " rework)" : " reworks)"));
+  const times = node("div", "muted");
+  for (const [label, key] of [["Created", "created_at"], ["Started", "round_started_at"], ["Updated", "updated_at"], ["Finished", "finished_at"]]) {
+    if (c[key]) { const row = node("div", "", label + " "); row.append(node("time", "", localTime(c[key]))); times.append(row); }
+  }
+  pair("Schedule", times);
+  section.append(table);
+  return section;
+}
+function runtimePanel(task, rt) {
+  const section = panel("Runtime Status");
+  const metrics = node("div", "metrics");
+  function tile(label, value, sub) {
+    const box = node("dl", "metric");
+    const dd = node("dd", "metric-value");
+    dd.append(value);
+    box.append(node("dt", "", label), dd, node("dd", "muted", sub));
+    metrics.append(box);
+  }
+  const usage = (rt === task && !live(task) ? task.total_usage || task.usage : rt.usage) || {};
+  tile("Status", statusBadge(rt.status), rt.exit_code != null ? "exit " + rt.exit_code : "—");
+  const seconds = rt.total_duration_seconds ?? rt.elapsed_seconds;
+  tile("Duration", live(task) ? clockFor(task, seconds) : readableDuration(seconds),
+    live(task) ? "Live elapsed time" : duration(seconds));
+  const cached = usage.input_tokens && usage.cached_input_tokens ? percent(usage.cached_input_tokens / usage.input_tokens) + " cached" : "";
+  tile("Total tokens", number(usage.total_tokens ?? (Object.keys(usage).length ? totalTokens(usage) : null)), cached);
+  tile("Activity", number(rt.event_count), "events · Round " + (task.round || 1));
+  const tokens = node("dl", "breakdown");
+  for (const [key, label] of [["input_tokens", "Input"], ["cached_input_tokens", "Cached input"],
+    ["output_tokens", "Output"], ["reasoning_output_tokens", "Reasoning output"]]) {
+    const item = node("div"); item.append(node("dt", "", label), node("dd", "", number(usage[key]))); tokens.append(item);
+  }
+  section.append(metrics, tokens);
+  if (live(task)) {
+    const banner = node("div", "row banner");
+    banner.append(node("i", "dot running"), rt.latest_activity?.text || "Running");
+    section.append(banner);
+  }
+  if (rt.rounds?.length > 1) section.append(dataTable(["Round", "Kind", "Model", "Effort", "Duration", "Tokens", "Status"],
+    rt.rounds.map(r => [r.round, cap(r.kind), r.model, r.reasoning_effort, duration(r.duration_seconds), number(r.usage?.total_tokens), cap(r.status)])));
+  return section;
+}
+function loading(section, label) {
+  const skeleton = node("div", "skeleton");
+  skeleton.setAttribute("role", "status"); skeleton.setAttribute("aria-label", "Loading " + label);
+  section.append(skeleton);
+  return section;
+}
+function choiceGroup(label, values, current, choose) {
+  const group = node("div", "group small-group");
+  group.setAttribute("role", "group"); group.setAttribute("aria-label", label);
+  for (const [key, text] of values) {
+    const b = button(text, () => choose(key));
+    pressed(b, key === current); b.dataset.focus = label + key;
+    group.append(b);
+  }
+  return group;
+}
+function setOption(key, value) {
+  detailState[key] = value;
+  renderDetail(selectedTask());
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const active = document.activeElement;
+    const input = node("textarea");
+    input.style.position = "fixed"; input.style.opacity = "0"; input.value = text;
+    document.body.append(input); input.select();
+    const ok = document.execCommand("copy"); input.remove(); active?.focus({preventScroll: true});
+    if (!ok) throw new Error("Copy unavailable in this host.");
   }
 }
-
+function currentPrompt() {
+  const prompts = detail?.prompts || [];
+  return prompts.find(p => p.round === detailState.round) || prompts[0];
+}
+function fullViewButton(kind) {
+  const label = kind === "prompt" ? "prompt" : "message stream";
+  const b = button("Full view", () => setSubView(kind), "icon-button");
+  b.prepend(icon("maximize", 13));
+  b.id = "expand-" + kind;
+  b.dataset.focus = b.id;
+  b.setAttribute("aria-label", "Open " + label + " in full view");
+  b.setAttribute("aria-haspopup", "dialog");
+  return b;
+}
+function promptControls() {
+  const controls = node("div", "reading-controls");
+  const current = currentPrompt();
+  if (!current) return controls;
+  const modes = choiceGroup("Prompt format", [[false, "Formatted"], [true, "Raw"]], detailState.raw, v => setOption("raw", v));
+  const copy = button("Copy", async () => {
+    try {
+      await copyText(current.text); copy.textContent = "Copied"; copy.prepend(icon("check-small", 13));
+      setTimeout(() => { copy.textContent = "Copy"; copy.prepend(icon("copy", 13)); }, 1800);
+    } catch (e) { showNotice(e.message); }
+  }, "icon-button");
+  copy.dataset.focus = "copy";
+  copy.prepend(icon("copy", 13)); controls.append(modes, copy);
+  return controls;
+}
+function appendRoundTabs(parent) {
+  const prompts = detail?.prompts;
+  if (prompts?.length > 1) {
+    const tabs = choiceGroup("Prompt round", prompts.map(p => [p.round, "Round " + p.round + " · " + p.filename]),
+      currentPrompt().round, v => setOption("round", v));
+    tabs.classList.add("prompt-tabs"); parent.append(tabs);
+  }
+}
+function promptContent(full = false) {
+  const surface = node("div", full ? "full-prompt" : "prompt-surface");
+  if (!full) surface.tabIndex = 0;
+  if (!detail) return loading(surface, "prompt");
+  const current = currentPrompt();
+  if (!current) { surface.append(node("p", "muted", "No prompt recorded.")); return surface; }
+  surface.append(detailState.raw ? node("pre", "", current.text) : markdown(current.text));
+  if (current.truncated) surface.append(node("p", "muted", current.filename ? "Prompt excerpt · " + current.filename : "Prompt summary"));
+  return surface;
+}
+function promptPanel() {
+  const section = panel("Prompt");
+  const controls = promptControls();
+  controls.append(fullViewButton("prompt"));
+  section.firstChild.append(controls);
+  appendRoundTabs(section);
+  section.append(promptContent());
+  return section;
+}
+function streamRow(item, key) {
+  const meta = item.meta || {};
+  if (["round_start", "turn_status"].includes(item.kind)) {
+    const text = item.title + (meta.usage ? " · " + number(meta.usage.total_tokens) + " tokens" : "");
+    return node("div", "milestone", text);
+  }
+  const collapsible = ["command", "reasoning"].includes(item.kind);
+  const row = node(collapsible ? "details" : "article", "event " + (["report", "error"].includes(item.kind) ? item.kind : ""));
+  const heading = node("div", "stream-heading");
+  let symbol = activityIcons[item.kind] || "layers";
+  if (item.kind === "command" && item.status === "completed") symbol = "check";
+  if (item.kind === "command" && item.status === "failed") symbol = "alert";
+  const glyph = icon(symbol, 14);
+  glyph.classList.add("stream-icon", item.kind);
+  if (item.kind === "command") glyph.classList.add("command-" + item.status);
+  const title = node("strong", item.kind === "command" ? "mono command-title" : "", item.title);
+  if (item.kind === "command") title.title = item.title;
+  heading.append(glyph, title);
+  if (item.kind === "report") heading.append(statusBadge(meta.status));
+  if (item.kind === "command" && item.status === "running") heading.prepend(node("i", "dot running"));
+  if (item.ts) heading.append(node("time", "", localTime(item.ts)));
+  if (item.kind === "command" && item.status === "failed")
+    heading.append(node("span", "pill failed exit-code", "rc=" + (meta.exit_code ?? "—")));
+  if (collapsible) {
+    const summary = node("summary"); summary.append(heading); row.append(summary);
+    summary.dataset.focus = key;
+    rememberOpen(row, key);
+  } else row.append(heading);
+  if (item.kind === "command") {
+    row.append(node("pre", "output", meta.command || item.title));
+    if (item.body) row.append(node("pre", "output", item.body));
+    if (meta.output_truncated) row.append(node("small", "muted", "Output truncated"));
+  } else if (item.kind === "file_change") {
+    const chips = node("div", "chips");
+    for (const f of meta.files || []) chips.append(node("code", "pill", f.kind + " · " + f.path));
+    row.append(chips);
+  } else if (item.kind === "report") {
+    row.append(markdown(meta.summary || item.body));
+    const files = node("div", "chips");
+    for (const f of meta.files_changed || []) files.append(node("code", "pill", f));
+    if (files.childElementCount) row.append(files);
+    if (meta.tests_summary) {
+      const tests = node("div", "report-field");
+      tests.append(node("h3", "", "Tests"), markdown(meta.tests_summary));
+      row.append(tests);
+    }
+    if (meta.commands_run?.length) {
+      const commands = node("details"); commands.append(node("summary", "", "Commands run"));
+      for (const cmd of meta.commands_run) commands.append(node("pre", "output", cmd));
+      rememberOpen(commands, key + "-report"); row.append(commands);
+    }
+    if (meta.open_issues?.length) {
+      row.append(node("strong", "", "Open issues"));
+      const list = node("ul");
+      for (const issue of meta.open_issues) {
+        const entry = node("li");
+        inline(entry, issue);
+        list.append(entry);
+      }
+      row.append(list);
+    }
+  } else if (item.body) row.append(markdown(item.body));
+  if (meta.truncated) row.append(node("small", "muted", "Message truncated"));
+  return row;
+}
+function rememberOpen(el, key) {
+  el.dataset.openKey = key;
+  el.open = detailState.opened.has(key);
+}
+function streamControls() {
+  const choices = ["All", "Messages", "Commands", "Files"];
+  return choiceGroup("Stream filter", choices.map(v => [v,v]), detailState.filter, v => setOption("filter", v));
+}
+function streamPanel() {
+  const section = panel("Message Stream");
+  const controls = node("div", "reading-controls");
+  controls.append(streamControls(), fullViewButton("stream"));
+  if (detail) section.firstChild.replaceChildren(groupTitle("Message Stream", detail.total_stream_items));
+  section.firstChild.append(controls);
+  section.append(streamContent());
+  return section;
+}
+function streamContent(full = false) {
+  const data = detail;
+  const section = node("div", full ? "full-stream" : "stream-viewport");
+  if (!full) section.tabIndex = 0;
+  if (!data) return loading(section, "messages");
+  if (data.summary_only) section.append(node("p", "muted history-hint",
+    "Showing recent activity. Restart the MCP server to load full session history."));
+  if (data.messages_truncated) section.append(node("p", "muted",
+    "Showing latest " + data.messages.length + " of " + data.total_stream_items + " stream items"));
+  const stream = node("div", "stream");
+  const kinds = {Messages: ["message", "report", "error"], Commands: ["command"], Files: ["file_change"]};
+  const offset = data.total_stream_items - data.messages.length;
+  data.messages.forEach((item, i) => {
+    if (detailState.filter === "All" || kinds[detailState.filter]?.includes(item.kind)) {
+      const key = item.stream_id ?? item.round + "-" + (offset + i);
+      const row = streamRow(item, key);
+      row.dataset.streamKey = key;
+      stream.append(row);
+    }
+  });
+  if (!stream.childElementCount) stream.append(node("p", "muted", "No matching stream items."));
+  section.append(stream);
+  if (data.stderr_tail) {
+    const stderr = node("details", "event");
+    stderr.append(node("summary", "", "Stderr output"), node("pre", "output", data.stderr_tail));
+    rememberOpen(stderr, "stderr"); section.append(stderr);
+  }
+  return section;
+}
+function evaluation(task) {
+  const section = panel("Evaluation");
+  section.append(feedbackForm(task, true), node("div", "replies"));
+  return section;
+}
+function updateReplies(container, replies) {
+  const key = JSON.stringify(replies);
+  if (container.renderKey === key) return;
+  container.renderKey = key;
+  container.replaceChildren();
+  if (replies.length) container.append(node("h3", "", "First replies"));
+  for (const reply of replies) {
+    const row = node("div", "reply");
+    row.append(node("span", "pill", "Round " + reply.round), node("blockquote", "", reply.prompt));
+    container.append(row);
+  }
+}
+// Keep unchanged sections mounted so polling preserves selections, scroll positions and in-progress edits.
+function captureDisclosures(container) {
+  for (const el of container.querySelectorAll("[data-open-key]")) {
+    if (el.open) detailState.opened.add(el.dataset.openKey);
+    else detailState.opened.delete(el.dataset.openKey);
+  }
+}
+function detailSection(id, dependencies, build, parent = detailView) {
+  const key = JSON.stringify(dependencies);
+  const old = byId(id);
+  if (old && sectionKeys.get(id) === key) return old;
+  const focusKey = old?.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
+  const scrollable = ".prompt-surface, .stream-viewport";
+  const viewport = parent.id === "sub-body" ? parent : old?.querySelector(scrollable);
+  const scrollTop = viewport?.scrollTop;
+  // Anchor the first visible stream item when earlier items change or age out.
+  const top = viewport?.getBoundingClientRect().top;
+  const anchor = scrollTop && Array.from(old?.querySelectorAll("[data-stream-key]") || [])
+    .find(row => row.getBoundingClientRect().bottom > top);
+  const anchorTop = anchor ? anchor.getBoundingClientRect().top - top : 0;
+  const el = build(); el.id = id;
+  if (old) old.replaceWith(el); else parent.append(el);
+  sectionKeys.set(id, key);
+  if (scrollTop) {
+    const scroller = parent.id === "sub-body" ? parent : el.querySelector(scrollable);
+    if (scroller) {
+      scroller.scrollTop = scrollTop;
+      const row = anchor && Array.from(el.querySelectorAll("[data-stream-key]"))
+        .find(entry => entry.dataset.streamKey === anchor.dataset.streamKey);
+      if (row) scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchorTop;
+    }
+  }
+  if (focusKey) [...el.querySelectorAll("[data-focus]")].find(n => n.dataset.focus === focusKey)?.focus({preventScroll: true});
+  return el;
+}
+function subHeader(task) {
+  const header = node("header");
+  const bar = node("div", "detail-bar");
+  const back = button("Back", () => setSubView(""), "icon-button");
+  back.id = "back-sub"; back.dataset.focus = "back-sub"; back.prepend(icon("arrow-left", 14));
+  const name = node("div", "detail-name");
+  const line = node("div", "row");
+  const title = node("h2", "", subView === "prompt" ? "Prompt" : "Message Stream");
+  title.id = "sub-title";
+  line.append(title);
+  if (subView === "stream" && detail) line.append(node("span", "pill", number(detail.total_stream_items)));
+  name.append(line, node("p", "muted", task?.task_title || selected));
+  bar.append(back, name, subView === "prompt" ? promptControls() : streamControls());
+  header.append(bar);
+  if (subView === "prompt") appendRoundTabs(header);
+  return header;
+}
+function setSubView(next) {
+  const previous = subView;
+  if (previous === next) return;
+  captureDisclosures(previous ? subLayer : detailView);
+  subView = next;
+  byId("sub-heading").replaceChildren();
+  byId("sub-body").replaceChildren();
+  byId("sub-body").scrollTop = 0;
+  if (!next) {
+    for (const el of detailView.querySelectorAll("[data-open-key]")) el.open = detailState.opened.has(el.dataset.openKey);
+  }
+  render();
+  (next ? byId("back-sub") : byId("expand-" + previous))?.focus({preventScroll: true});
+}
+function renderDetail(task) {
+  const promptKey = [detail?.prompts, detailState.round, detailState.raw];
+  const streamKey = [detail?.messages, detail?.total_stream_items, detail?.stderr_tail, detail?.summary_only, detailState.filter];
+  if (subView) {
+    captureDisclosures(subLayer);
+    const prompt = subView === "prompt";
+    detailSection("reading-header", [subView, task?.task_title, prompt ? promptKey :
+      [detailState.filter, detail?.total_stream_items]], () => subHeader(task), byId("sub-heading"));
+    detailSection("reading-body", [subView, prompt ? promptKey : streamKey],
+      () => prompt ? promptContent(true) : streamContent(true), byId("sub-body"));
+    return;
+  }
+  captureDisclosures(detailView);
+  detailSection("detail-header", [task?.task_id, task?.task_title, task?.status, missingSelected, confirmTask?.task_id, cancelling],
+    () => detailHeader(task), byId("detail-heading"));
+  if (!task) {
+    detailView.replaceChildren();
+    return;
+  }
+  const c = detail?.config || task;
+  const rt = detail?.runtime || task;
+  detailSection("configuration", [c.task_id, c.session_id, c.effective_model, c.effective_reasoning_effort, detail?.config],
+    () => configuration(c));
+  detailSection("runtime", [rt, live(task) && task.receivedAt], () => runtimePanel(task, rt));
+  detailSection("prompt", promptKey, promptPanel);
+  detailSection("stream", streamKey, streamPanel);
+  const panel = detailSection("evaluation", task.task_id, () => evaluation(task));
+  panel.querySelector("form").update(task);
+  updateReplies(panel.querySelector(".replies"), task.feedback?.user_first_prompts || []);
+}
 function renderAnalytics() {
   const previousScroll = analyticsView.querySelector(".table-scroll");
   const scrollPosition = previousScroll?.scrollLeft ?? 0;
@@ -718,55 +1438,25 @@ function renderAnalytics() {
   }
 }
 
-function render(focusTask = document.activeElement?.dataset.cancelTask, background = false) {
-  byId("active").textContent = `${count} active`;
-  byId("total").textContent = `${total} total`;
-  const showTasks = view === "tasks";
-  tasksView.hidden = !showTasks;
-  analyticsView.hidden = showTasks;
-  byId("filter").hidden = !showTasks;
-  byId("show-tasks").setAttribute("aria-pressed", String(showTasks));
-  byId("show-analytics").setAttribute("aria-pressed", String(!showTasks));
-  if (!showTasks) {
-    clocks.length = 0;
-    renderAnalytics();
-    return;
-  }
-  if (background && document.activeElement?.closest(".feedback-form")) {
-    taskRenderPending = true;
-    return;
-  }
-  taskRenderPending = false;
-  const focusFeed = document.activeElement?.parentElement?.dataset.feedTask;
-  for (const details of tasksView.querySelectorAll("details")) {
-    feedState.set(details.dataset.feedTask, details.open);
-  }
-  clocks.length = 0;
-  const visible = tasks.filter(task => !selected || task.task_id === selected);
-  const groups = [["Active tasks", visible.filter(live)]];
-  if (!activeOnly) groups.push(["Recent tasks", visible.filter(task => !live(task))]);
-  const sections = [];
-  for (const [heading, members] of groups) {
-    if (!members.length) continue;
-    const section = node("section", "section");
-    const grid = node("div", "grid");
-    for (const task of members) grid.append(taskCard(task));
-    section.append(node("h2", "", heading), grid);
-    sections.push(section);
-  }
-  if (!sections.length) {
-    const message = !receivedResult ? "Connecting to Codex Castor…" :
-      selected ? `No matching tasks for ${selected}.` : activeOnly ? "No active tasks." : "No Codex tasks yet.";
-    sections.push(node("p", "empty", message));
-  }
-  tasksView.replaceChildren(...sections);
-  if (focusTask) {
-    [...tasksView.querySelectorAll("[data-cancel-task]")]
-      .find(button => button.dataset.cancelTask === focusTask)?.focus({preventScroll: true});
-  } else if (focusFeed) {
-    [...tasksView.querySelectorAll("details")]
-      .find(details => details.dataset.feedTask === focusFeed)?.querySelector("summary")?.focus({preventScroll: true});
-  }
+function render() {
+  byId("active").textContent = count + " active";
+  byId("total").textContent = total + " total";
+  byId("active-dot").classList.toggle("running", count > 0);
+  byId("active-chip").classList.toggle("info", count > 0);
+  const overlay = view === "detail";
+  homeLayer.inert = overlay;
+  detailLayer.inert = !!subView;
+  detailLayer.hidden = !overlay;
+  subLayer.hidden = !subView;
+  document.body.classList.toggle("overlay-open", overlay);
+  byId("filters").hidden = view === "analytics";
+  byId("active-only").textContent = count ? "Active (" + count + ")" : "Active";
+  pressed(byId("all"), !activeOnly); pressed(byId("active-only"), activeOnly);
+  pressed(byId("show-tasks"), view !== "analytics"); pressed(byId("show-analytics"), view === "analytics");
+  tasksView.hidden = view === "analytics"; analyticsView.hidden = view !== "analytics";
+  if (view === "tasks") renderTasks();
+  else if (view === "analytics") renderAnalytics();
+  else renderDetail(selectedTask());
   tick();
 }
 
@@ -794,18 +1484,16 @@ window.addEventListener("message", event => {
   } else if (msg.method === "ui/notifications/tool-input") {
     const candidate = msg.params?.arguments?.task_id;
     const next = typeof candidate === "string" ? candidate : "";
-    if (next !== selected) {
-      selected = next;
-      generation++;
-      render();
-      if (ready && !paused) refresh();
-    }
+    if (next !== selected) switchView(next ? "detail" : "tasks", next);
   } else if (msg.method === "ui/notifications/tool-result") {
-    if (msg.params?.isError || !setSnapshot(toolPayload(msg.params))) {
+    const data = toolPayload(msg.params);
+    const detailOnly = !!data?.selected_task && data.tasks?.length === 0;
+    if (msg.params?.isError || !setSnapshot(data, {detailOnly})) {
       showNotice(msg.params?.content?.[0]?.text || "Could not load the monitor result.");
     } else {
       showNotice("");
-      schedule();
+      if (!selected && data.tasks.length < Math.min(data.total || 0, 200)) refresh();
+      else schedule();
     }
   } else if (msg.method === "ui/notifications/tool-cancelled") {
     showNotice(msg.params?.reason || "The host cancelled the initial monitor request.");
@@ -823,8 +1511,7 @@ window.addEventListener("message", event => {
       });
       resizeObserver.observe(document.body);
     }
-    if (receivedResult) schedule();
-    else refresh();
+    refresh();
   } else if (!msg.method && pending.has(msg.id)) {
     const request = pending.get(msg.id);
     pending.delete(msg.id);
@@ -833,33 +1520,6 @@ window.addEventListener("message", event => {
     else request.resolve(msg.result);
   }
 });
-
-for (const name of ["tasks", "analytics"]) {
-  byId(`show-${name}`).addEventListener("click", () => {
-    view = name;
-    render();
-  });
-}
-tasksView.addEventListener("focusout", () => {
-  requestAnimationFrame(() => {
-    if (taskRenderPending && view === "tasks") render(undefined, true);
-  });
-});
-byId("filter").addEventListener("click", event => {
-  activeOnly = !activeOnly;
-  event.currentTarget.textContent = activeOnly ? "Show all" : "Active only";
-  event.currentTarget.setAttribute("aria-pressed", String(activeOnly));
-  render();
-});
-byId("pause").addEventListener("click", event => {
-  paused = !paused;
-  event.currentTarget.textContent = paused ? "Resume" : "Pause";
-  event.currentTarget.setAttribute("aria-pressed", String(paused));
-  if (paused) clearTimeout(pollTimer);
-  else refresh();
-});
-refreshButton.addEventListener("click", refresh);
-tickTimer = setInterval(tick, 1000);
 
 function demoAnalytics(sample) {
   const settled = sample.filter(task => !live(task));
@@ -892,50 +1552,148 @@ function demoAnalytics(sample) {
   };
 }
 
+function demoTasks() {
+  const ago = seconds => new Date(Date.now() - seconds * 1000).toISOString();
+  const entries = [
+    ["live-observability", "Trace live task activity", "Surface the current command and elapsed time while a session is running, including work started in an isolated worktree.",
+      "running", 102, 66000, 57000, 1380, "command", "python3 -m unittest discover -s tests -v"],
+    ["installer-validation", "Verify installer upgrades", "Exercise upgrades against an existing installation. Preserve user settings and check that the bundled monitor stays available after the upgrade.",
+      "completed", 407.18, 1380000, 1251660, 4173, "report", "Upgrade and rollback checks passed with existing settings preserved."],
+    ["statusline-cleanup", "Make the status line easier to scan", "Show the session name and elapsed time together. Keep the terminal output readable when the workspace path is long.",
+      "completed", 36, 23800, 9200, 460, "report", "The status line now keeps the session name visible in narrow terminals."],
+    ["export-validation", "Check the telemetry export", "Compare the exported task ledger with the monthly report and identify any missing records.",
+      "failed", 19, 12000, 3100, 300, "error", "The monthly export fixture is missing."]
+  ];
+  return entries.map(([id, title, prompt, status, seconds, input, cached, output, kind, activity], i) => {
+    const start = ago(seconds + i * 570);
+    const project = ["codex-castor", "codex-castor", "HikariDaily", "telemetry-lab"][i];
+    const usage = {input_tokens: input, cached_input_tokens: cached, output_tokens: output,
+      reasoning_output_tokens: Math.floor(output / 3), total_tokens: input + output};
+    return {task_id: id, task_title: title, prompt_preview: prompt, task_summary: prompt,
+      round: i === 1 ? 2 : 1, rework_count: i === 1 ? 1 : 0, status, alive: status === "running",
+      current_activity: activity, latest_activity: {kind, text: activity}, session_id: "castor-demo-0" + (i + 1),
+      effective_model: "gpt-6.2-sol", effective_reasoning_effort: i === 1 ? "xhigh" : "high",
+      model_source: "runtime_rollout", reasoning_effort_source: i === 1 ? "override" : "config",
+      config_model: "gpt-6.2-sol", config_reasoning_effort: "high", project, requested_workdir: "/workspace/" + project, workdir: "/workspace/" + project,
+      worktree_branch: i < 2 ? "codex/" + id : null, created_at: start, round_started_at: i === 1 ? ago(650) : start,
+      updated_at: ago(i * 570), finished_at: i ? ago(i * 570) : null,
+      elapsed_seconds: i === 1 ? 80 : seconds, total_duration_seconds: i ? seconds : null,
+      total_usage: i ? usage : null, usage, event_count: [12, 69, 18, 7][i], exit_code: i ? (i === 3 ? 1 : 0) : null,
+      feedback: i === 1 ? {rating: 4, verdict: "accepted", notes: "Verified the upgrade on an existing install.",
+        user_first_prompts: [{round: 1, prompt: "Please also cover rollback when the installer is interrupted."},
+          {round: 2, prompt: "The upgrade works on my machine too."}]} : {}};
+  });
+}
+function demoDetail(task) {
+  const id = task.task_id;
+  const multi = task.round > 1;
+  const firstPrompt = "# " + task.task_title + "\n\n" + task.prompt_preview + "\n\n## Verification\n\n" +
+    "- Run the focused checks in the project workspace.\n- Record the results in the **final report**.";
+  const prompts = [{round: 1, kind: "dispatch", filename: "spec.md", text: firstPrompt, truncated: false}];
+  if (multi) prompts[0].text += [
+    "", "## Existing installations", "Start with a workspace that already contains a customized configuration. " +
+    "Record the settings before the upgrade so the test can compare individual values afterward.",
+    "", "### Upgrade checks", "1. Install the earlier release in a temporary home directory.",
+    "2. Add a project-specific setting and an unrelated server entry.",
+    "3. Run the upgrade twice and compare the generated configuration after each run.",
+    "", "### Resource checks", "Read the bundled monitor through the local MCP server and verify the resource type.",
+    "", "```sh", "python3 scripts/doctor.py --repo-only", "```", "", "---",
+    "> Keep all installation fixtures inside the temporary workspace.", "",
+    "## Acceptance", "The second upgrade must preserve the same settings as the first. " +
+    "Record the checks in the report and list any files that need manual recovery."
+  ].join("\n");
+  if (multi) prompts.push({round: 2, kind: "resume", filename: "feedback-r2.md", truncated: false,
+    text: "## Verify rollback\n\n> Please also cover rollback when the installer is interrupted.\n\n1. Start with an existing install.\n2. Interrupt the upgrade.\n3. Check that the original settings remain intact.\n\n```sh\npython3 scripts/doctor.py --repo-only\n```"});
+  const messages = [];
+  const add = (round, kind, title, body = "", meta = {}, status = "completed") =>
+    messages.push({round, kind, title, body, meta, status});
+  const rounds = [];
+  for (const p of prompts) {
+    const last = p.round === task.round;
+    const usage = Object.fromEntries(Object.entries(task.usage).map(([k,v]) =>
+      [k, multi ? (last ? Math.ceil(v / 2) : Math.floor(v / 2)) : v]));
+    usage.total_tokens = usage.input_tokens + usage.output_tokens;
+    rounds.push({round: p.round, kind: p.kind, prompt_file: p.filename, model: task.effective_model,
+      reasoning_effort: task.effective_reasoning_effort, duration_seconds: multi ? (last ? 80 : 327.18) : task.elapsed_seconds,
+      status: last ? task.status : "completed", usage, started_at: p.round === 1 ? task.created_at : task.round_started_at,
+      finished_at: last ? task.finished_at : task.round_started_at});
+    if (multi) add(p.round, "round_start", "Round " + p.round + " · " + cap(p.kind));
+    if (multi && !last) {
+      add(p.round, "reasoning", "Reasoning", "Compare the settings before and after a second installation.");
+      add(p.round, "tool", "read_resource", "", {server: "workspace", tool: "read_resource"});
+      add(p.round, "search", "Installer rollback semantics", "", {queries: ["Installer rollback semantics"]});
+    }
+    add(p.round, "message", "Assistant", last && multi ? "I’ll check rollback against the existing installation." :
+      "I’ll start by checking the relevant fixtures and the current implementation.");
+    if (multi) add(p.round, "file_change", "Changed 2 files", "", {files: [
+      {kind: "update", path: "scripts/install.py"}, {kind: "update", path: "tests/test_install_and_doctor.py"}]});
+    const cmd = multi ? "python3 scripts/doctor.py --repo-only" : task.alive ?
+      task.latest_activity.text : "python3 -m unittest discover -s tests";
+    add(p.round, "command", cmd, task.alive ? "" : task.status === "failed" ? "FileNotFoundError: monthly.jsonl" :
+      "Checking task artifacts…\nAll checks passed.", {command: cmd, exit_code: last ? task.exit_code : 0}, last ? task.status : "completed");
+    if (task.status === "failed") add(p.round, "error", "Error", task.latest_activity.text, {}, "failed");
+    if (task.status === "completed") {
+      if (last) add(p.round, "report", "Final Report", task.latest_activity.text,
+        {status: "completed", summary: task.latest_activity.text, files_changed: multi ? ["scripts/install.py", "tests/test_install_and_doctor.py"] :
+          ["scripts/statusline.py"], commands_run: [cmd], tests_summary: "All targeted checks passed.", open_issues: []});
+      add(p.round, "turn_status", "Turn completed", "", {usage});
+    }
+  }
+  const config = {...task, effective_workdir: task.workdir, requested_workdir: task.workdir,
+    worktree_enabled: !!task.worktree_branch, round_count: task.round};
+  return {task_id: id, task_title: task.task_title, config, runtime: {...task, rounds,
+    total_duration_seconds: task.total_duration_seconds ?? task.elapsed_seconds}, prompts, messages,
+    total_stream_items: messages.length, messages_truncated: false,
+    stderr_tail: task.status === "failed" ? "FileNotFoundError: fixtures/monthly.jsonl\nExport check exited with code 1." : ""};
+}
+
+for (const name of ["tasks", "analytics"]) byId("show-" + name).addEventListener("click", () => switchView(name));
+for (const name of ["all", "active-only"]) byId(name).addEventListener("click", () => {
+  activeOnly = name !== "all"; render();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Tab" && selected) {
+    const layer = subView ? subLayer : detailLayer;
+    const controls = [...layer.querySelectorAll("button, input, select, textarea, summary, [tabindex]")]
+      .filter(el => el.tabIndex >= 0 && !el.disabled && el.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    }
+    return;
+  }
+  if (event.key !== "Escape" || event.target.closest("input, select, textarea")) return;
+  if (confirmTask) { confirmTask = null; render(); }
+  else if (subView) setSubView("");
+  else if (view === "detail") switchView("tasks");
+});
+detailLayer.addEventListener("click", event => {
+  if (event.target === detailLayer) switchView("tasks");
+});
+subLayer.addEventListener("click", event => {
+  if (event.target === subLayer) setSubView("");
+});
+tickTimer = setInterval(tick, 1000);
 if (preview) {
   byId("preview").hidden = false;
-  if (window.matchMedia("(prefers-color-scheme: dark)").matches) hostContext({theme: "dark"});
-  const ago = seconds => new Date(Date.now() - seconds * 1000).toISOString();
-  const sample = [{
-      task_id: "castor-observability", status: "running", alive: true, round: 1,
-      task_summary: "Show dispatched task activity in Codex Monitor.",
-      effective_model: "gpt-6.2-sol", effective_reasoning_effort: "high",
-      config_model: "gpt-6.2-sol", config_reasoning_effort: "xhigh",
-      model_source: "runtime_rollout", reasoning_effort_source: "runtime_rollout",
-      worktree_branch: "codex/castor-observability", elapsed_seconds: 102,
-      current_activity: "▶ python3 -m unittest discover -s tests -v",
-      usage: {input_tokens: 110000, output_tokens: 1730},
-      recent_activities: [
-        {ts: ago(37), text: "💬 Checking task state and runtime settings"},
-        {ts: ago(16), text: "✎ Updated scripts/watch.py and mcp/monitor.html"},
-        {ts: ago(4), text: "▶ python3 -m unittest discover -s tests -v"},
-      ],
-    }, {
-      task_id: "installer-validation", status: "completed", alive: false, round: 2,
-      task_summary: "Validate installer and doctor checks with isolated configuration.",
-      effective_model: "gpt-6.2-sol", effective_reasoning_effort: "xhigh",
-      model_source: "config", reasoning_effort_source: "config",
-      worktree_branch: "codex/installer-validation", elapsed_seconds: 84,
-      current_activity: "✓ Installer checks passed", rework_count: 1, total_duration_seconds: 139,
-      total_usage: {input_tokens: 86000, cached_input_tokens: 37000, output_tokens: 1700, reasoning_output_tokens: 450},
-      feedback: {rating: 4, verdict: "accepted", notes: "Upgrade and uninstall checks passed.",
-        user_first_prompts: [{round: 2, prompt: "The upgrade works on my machine too.", recorded_at: ago(100)}]},
-    }, {
-      task_id: "statusline-cleanup", status: "completed", alive: false, round: 1,
-      task_summary: "Show the current task name in the terminal status line.",
-      effective_model: "gpt-6.2-sol", effective_reasoning_effort: "high",
-      model_source: "runtime_rollout", reasoning_effort_source: "runtime_rollout",
-      elapsed_seconds: 36, total_duration_seconds: 36, rework_count: 0,
-      total_usage: {input_tokens: 23800, cached_input_tokens: 9200, output_tokens: 460, reasoning_output_tokens: 120},
-      feedback: {},
-    }];
-  setSnapshot({server_time: ago(0), tasks: sample, analytics: demoAnalytics(sample)});
+  const params = new URLSearchParams(location.search);
+  const theme = params.get("theme");
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const applyTheme = () => hostContext({theme: ["light", "dark"].includes(theme) ? theme : media.matches ? "dark" : "light"});
+  media.addEventListener("change", applyTheme);
+  applyTheme();
+  const sample = demoTasks();
+  setSnapshot({server_time: new Date().toISOString(), tasks: sample, analytics: demoAnalytics(sample)});
+  if (sample.some(t => t.task_id === params.get("task"))) {
+    switchView("detail", params.get("task"));
+    if (["prompt", "stream"].includes(params.get("sub"))) setSubView(params.get("sub"));
+  }
 } else {
   render();
   post({id: 1, method: "ui/initialize", params: {
     appInfo: {name: "codex-castor-monitor", version: "1.1.0"},
-    appCapabilities: {availableDisplayModes: ["inline"]},
-    protocolVersion: protocol,
+    appCapabilities: {availableDisplayModes: ["inline"]}, protocolVersion: protocol,
   }});
 }
 </script>

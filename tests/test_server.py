@@ -334,11 +334,135 @@ class ServerTests(ServerHarness):
         self.assertIsNone(payload["selected_task"])
         self.assertIn("0 active", contents)
 
+    def test_monitor_on_demand_multi_round_detail(self):
+        task = self.state / "tasks" / "review"
+        task.mkdir(parents=True)
+        prompt = "# Review the ledger\n## Objective\nKeep every round visible."
+        (task / "spec.md").write_text(prompt)
+        (task / "feedback-r2.md").write_text("Include rollback.")
+        (task / "meta.json").write_text(json.dumps({
+            "task_id": "review", "session_id": SESSION, "status": "completed", "round": 2,
+            "exit_code": 0, "duration_seconds": 2, "effective_workdir": str(self.root), "model": "model-a",
+        }))
+        report = {"status": "completed", "summary": "Both rounds verified.", "files_changed": ["schema.py"],
+                  "commands_run": ["pwd"], "tests_summary": "Passed", "open_issues": []}
+        (task / "report-r2.json").write_text(json.dumps(report))
+        cmd = {"type": "command_execution", "id": "item1", "command": "/bin/zsh -lc 'pwd'"}
+        first = [{"type": "thread.started"}, {"type": "turn.started"},
+                 {"type": "item.started", "timestamp": "2025-01-01T00:00:00Z", "item": cmd},
+                 {"type": "item.completed", "item": {**cmd, "exit_code": 0, "aggregated_output": "project"}},
+                 {"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 5}}]
+        second = [{"type": "error", "message": "Noisy --dangerously-bypass-hook-trust warning"},
+                  {"type": "item.completed", "item": {"type": "file_change", "id": "item1",
+                   "changes": [{"path": str(self.root / "schema.py"), "kind": "add"}]}},
+                  {"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(report)}},
+                  {"type": "turn.completed", "usage": {"input_tokens": 60, "output_tokens": 3}}]
+        for n, events in enumerate([first, second], 1):
+            (task / f"events-r{n}.jsonl").write_text("\n".join(map(json.dumps, events)))
+        default, _ = self.monitor()
+        self.assertNotIn("task_detail", default)
+        snapshot, _ = self.monitor(task_id="review", include_detail=False)
+        summary = snapshot["selected_task"]
+        self.assertEqual(summary, default["tasks"][0])
+        self.assertEqual(summary["task_title"], "Review the ledger")
+        self.assertEqual(summary["prompt_preview"], "Keep every round visible.")
+        self.assertEqual(summary["latest_activity"], {"kind": "report", "text": report["summary"]})
+        self.assertNotIn("task_detail", snapshot)
+        snapshot, _ = self.monitor(task_id="review", include_detail=True, limit=0)
+        self.assertEqual(snapshot["selected_task"], summary)
+        detail = snapshot["task_detail"]
+        self.assertEqual(detail["config"]["session_id"], SESSION)
+        self.assertEqual(detail["config"]["effective_model"], "model-a")
+        self.assertEqual(detail["config"]["rework_count"], 1)
+        self.assertEqual(detail["runtime"]["usage"]["total_tokens"], 168)
+        self.assertEqual(detail["runtime"]["event_count"], len(first) + len(second))
+        self.assertEqual([p["text"] for p in detail["prompts"]], [prompt, "Include rollback."])
+        self.assertEqual([r["prompt_file"] for r in detail["runtime"]["rounds"]], ["spec.md", "feedback-r2.md"])
+        messages = detail["messages"]
+        self.assertEqual([m["kind"] for m in messages],
+                         ["round_start", "command", "turn_status", "round_start", "file_change", "report", "turn_status"])
+        self.assertEqual(messages[1]["meta"]["command"], "pwd")
+        self.assertEqual(messages[1]["body"], "project")
+        self.assertEqual(messages[1]["ts"], first[2]["timestamp"])
+        self.assertEqual(messages[4]["meta"]["files"], [{"path": "schema.py", "kind": "add"}])
+        self.assertEqual(messages[5]["meta"], report)
+        self.assertFalse(detail["messages_truncated"])
+
+    def test_monitor_project_fallback_and_selected_list_limits(self):
+        for index in range(22):
+            task = self.state / "tasks" / f"session-{index:02}"
+            task.mkdir(parents=True)
+            meta = {"task_id": task.name, "status": "completed", "effective_workdir": "/work/Atlas",
+                    "updated_at": f"2026-01-{index + 1:02}T12:00:00Z"}
+            if index == 0:
+                meta.update(effective_workdir="/worktrees/session-00", worktree={"repo_root": "/work/HikariDaily"})
+            (task / "meta.json").write_text(json.dumps(meta))
+        default, _ = self.monitor()
+        self.assertEqual(len(default["tasks"]), 20)
+        self.assertEqual(default["tasks"][0]["project"], "Atlas")
+        home, _ = self.monitor(limit=200)
+        self.assertEqual(len(home["tasks"]), 22)
+        selected, _ = self.monitor(task_id="session-00", limit=1)
+        self.assertEqual(selected["tasks"], [selected["selected_task"]])
+        self.assertEqual(selected["selected_task"]["project"], "HikariDaily")
+        self.assertIsNone(selected["selected_task"]["requested_workdir"])
+        detail, _ = self.monitor(task_id="session-00", limit=0, include_detail=True)
+        self.assertEqual(detail["tasks"], [])
+        self.assertEqual(detail["task_detail"]["config"]["project"], "HikariDaily")
+
+    def test_monitor_sorts_settled_tasks_by_finished_at_across_feedback(self):
+        older = self.state / "tasks" / "older"
+        newer = self.state / "tasks" / "newer"
+        older.mkdir(parents=True)
+        newer.mkdir(parents=True)
+        older_meta = {
+            "task_id": "older", "status": "completed", "effective_workdir": "/work/Atlas",
+            "created_at": "2026-01-01T10:00:00Z", "updated_at": "2026-01-03T12:00:00Z",
+            "finished_at": "2026-01-01T12:00:00Z",
+        }
+        newer_meta = {
+            "task_id": "newer", "status": "completed", "effective_workdir": "/work/Atlas",
+            "created_at": "2026-01-02T10:00:00Z", "updated_at": "2026-01-02T12:00:00Z",
+            "finished_at": "2026-01-02T12:00:00Z",
+        }
+        (older / "meta.json").write_text(json.dumps(older_meta))
+        (newer / "meta.json").write_text(json.dumps(newer_meta))
+        feedback = self.receive(self.send_tool("codex_feedback", task_id="older", rating=5, verdict="accepted"))["result"]
+        self.assertIs(feedback["isError"], False)
+        updated_older = json.loads((older / "meta.json").read_text())
+        self.assertEqual(updated_older["updated_at"], "2026-01-03T12:00:00Z")
+        snapshot, _ = self.monitor(limit=10)
+        self.assertEqual([task["task_id"] for task in snapshot["tasks"]], ["newer", "older"])
+
+    def test_monitor_detail_limits_stream_and_prompt_bytes(self):
+        task = self.state / "tasks" / "large"
+        task.mkdir(parents=True)
+        (task / "meta.json").write_text(json.dumps({"task_id": "large", "status": "failed"}))
+        (task / "spec.md").write_text("界" * 120001)
+        (task / "stderr-r1.log").write_text("\n".join(str(i) for i in range(60)))
+        with (task / "events-r1.jsonl").open("w") as f:
+            for i in range(260):
+                f.write(json.dumps({"type": "item.completed", "item": {"id": str(i), "type": "agent_message",
+                                       "text": f"Message {i}: " + "界" * 4000}}) + "\n")
+        snapshot, content = self.monitor(task_id="large", include_detail=True)
+        detail = snapshot["task_detail"]
+        self.assertTrue(detail["messages_truncated"])
+        self.assertTrue(detail["prompts"][0]["truncated"])
+        self.assertEqual(detail["total_stream_items"], 260)
+        self.assertEqual(len(detail["messages"]), 250)
+        self.assertTrue(detail["messages"][0]["body"].startswith("Message 10:"))
+        self.assertTrue(detail["messages"][-1]["body"].startswith("Message 259:"))
+        self.assertEqual(detail["stderr_tail"].splitlines()[0], "20")
+        self.assertLess(len(json.dumps(snapshot, ensure_ascii=False).encode()) + len(content.encode()), 1024**2)
+
     def test_dispatch_in_direct_workdir_and_resume_by_task_id(self):
         workdir = self.make_repo()
         task = self.state / "tasks" / "direct"
         first = self.call("codex_dispatch", task_id="direct", workdir=str(workdir), spec="implement",
-                          model="mock-model", reasoning_effort="medium", extra_writable_dirs=[str(self.root)])
+                          model="mock-model", reasoning_effort="medium", extra_writable_dirs=[str(self.root)],
+                          title="  Verify direct dispatch  ")
+        self.assertEqual(read_json(task / "meta.json")["title"], "Verify direct dispatch")
+        self.assertEqual(self.monitor(task_id="direct")[0]["selected_task"]["task_title"], "Verify direct dispatch")
         self.assertEqual(first["workdir"], str(workdir))
         self.assertFalse(first["worktree"]["enabled"])
         self.assertEqual(first["status"], "completed")
@@ -588,6 +712,10 @@ class ServerTests(ServerHarness):
         self.assertEqual(result["status"], "completed")
         self.assertTrue(result["worktree"]["enabled"])
         self.assertEqual(result["worktree"]["path"], str(worktree))
+        summary = self.monitor(task_id="isolated")[0]["selected_task"]
+        self.assertEqual(summary["project"], workdir.name)
+        self.assertEqual(summary["requested_workdir"], str(workdir))
+        self.assertEqual(summary["workdir"], str(worktree))
         self.assertEqual(result["worktree"]["branch"], "codex/isolated")
         self.assertEqual(self.git(worktree, "branch", "--show-current"), "codex/isolated")
         self.assertEqual(result["git"]["branch"], "codex/isolated")
