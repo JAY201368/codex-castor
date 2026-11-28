@@ -23,6 +23,7 @@
   --success: var(--color-text-success, var(--fb-success));
   --warning: var(--color-text-warning, var(--fb-warning));
   --danger: var(--color-text-danger, var(--fb-danger));
+  --danger-ink: #ffffff;
   --ring: var(--color-ring-primary, var(--accent));
   --wash: color-mix(in srgb, var(--accent) 10%, transparent);
   --good: color-mix(in srgb, var(--success) 10%, transparent);
@@ -38,6 +39,7 @@
   --fb-text: #ecf0f5; --fb-text-2: #bdc7d4; --fb-text-3: #9ca9ba;
   --fb-border: #394351; --fb-border-2: #303946;
   --fb-accent: #60a5fa; --fb-success: #4ade80; --fb-warning: #fbbf24; --fb-danger: #f87171;
+  --danger-ink: #12161d;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -125,11 +127,21 @@ svg { flex: none; vertical-align: middle; }
 .feedback-row { gap: 5px; min-width: 0; }
 .stars { gap: 0; } .star { width: 24px; min-height: 24px; height: 24px; padding: 0; background: transparent; border: 0; color: var(--muted); }
 .star:hover, .star.filled { color: var(--warning); }
-.feedback-row select, .cancel { height: 26px; min-height: 26px; font-size: 11.5px; }
-.feedback-row select { min-width: 0; width: 92px; margin-left: auto; }
+.feedback-row select { height: 26px; min-height: 26px; font-size: 11.5px; min-width: 0; width: 92px; margin-left: auto; }
 .feedback-row input { flex: 1; min-width: 0; height: 28px; font-size: 12px; }
 .save { min-width: 61px; height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.save.error, .cancel.confirm { border-color: var(--danger); color: var(--danger); }
+.save.error { border-color: var(--danger); color: var(--danger); }
+.cancel { height: 26px; min-height: 26px; font-size: 11.5px; color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--border)); background: var(--surface);
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease; }
+.cancel:hover:not(:disabled):not(.confirm) { border-color: var(--danger); background: var(--bad);
+  color: color-mix(in srgb, var(--danger) 88%, var(--text)); }
+.cancel.confirm { background: var(--danger); border-color: var(--danger); color: var(--danger-ink); }
+.cancel.confirm:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 88%, var(--text));
+  border-color: color-mix(in srgb, var(--danger) 88%, var(--text)); }
+.card-model .cancel { margin-left: auto; flex: none; height: 22px; min-height: 22px; padding: 0 8px;
+  font-size: 11px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 .empty { padding: 28px; color: var(--secondary); background-image: var(--dots); background-size: 8px 8px; }
 .notice { padding: 8px 12px; color: var(--danger); background: var(--bad); border-radius: 6px; }
 body.overlay-open { overflow: hidden; min-height: 100dvh; }
@@ -313,7 +325,9 @@ let tasks = [];
 let analytics;
 let telemetryDir = "~/.gemini/codex-castor";
 let view = "tasks";
+const CONFIRM_TIMEOUT_MS = 4000;
 let confirmTask = null;
+let confirmTimer = null;
 let cancelling = null;
 let pollTimer;
 let tickTimer;
@@ -429,7 +443,7 @@ function setSnapshot(data, {detailOnly = false} = {}) {
   if (data.task_detail?.task_id === selected) detail = data.task_detail;
   else if (detailOnly && data.selected_task?.task_id === selected) detail = summaryDetail(data.selected_task);
   receivedResult = true;
-  if (!tasks.some(task => sameRound(task, confirmTask) && live(task))) confirmTask = null;
+  if (confirmTask && !tasks.some(task => sameRound(task, confirmTask) && live(task))) clearConfirm();
   if (selected && !detailOnly) renderTasks();
   render();
   return true;
@@ -556,7 +570,7 @@ function switchView(next, id = "") {
   selected = id;
   subView = "";
   generation++;
-  confirmTask = null;
+  clearConfirm();
   detail = null;
   missingSelected = false;
   sectionKeys.clear();
@@ -579,21 +593,51 @@ function switchView(next, id = "") {
   refresh();
 }
 function cancelButton(task, compact) {
-  const confirm = sameRound(task, confirmTask);
-  const b = button(confirm ? (compact ? "Confirm?" : "Confirm cancel?") : (compact ? "Cancel" : "Cancel task"),
-    () => cancel(task), "cancel" + (confirm ? " confirm" : ""));
-  b.disabled = cancelling === task.task_id;
+  const b = button("", event => {
+    event.stopPropagation();
+    cancel(task);
+  }, "cancel");
+  if (compact) b.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+  });
   b.dataset.focus = "cancel";
+  b.update = current => {
+    task = current;
+    const confirm = sameRound(task, confirmTask);
+    const label = confirm ? "Confirm" : compact ? "Cancel" : "Cancel task";
+    if (b.textContent !== label) {
+      b.textContent = label;
+      b.setAttribute("aria-label", confirm ? "Confirm cancel" : "Cancel task");
+    }
+    b.classList.toggle("confirm", confirm);
+    b.disabled = cancelling === task.task_id;
+  };
+  b.update(task);
   return b;
+}
+function syncCancel(container, task, compact) {
+  const control = container.querySelector(".cancel");
+  if (!live(task)) control?.remove();
+  else if (control) control.update(task);
+  else container.append(cancelButton(task, compact));
+}
+function clearConfirm() {
+  if (confirmTimer !== null) {
+    clearTimeout(confirmTimer);
+    confirmTimer = null;
+  }
+  confirmTask = null;
 }
 async function cancel(task) {
   if (!sameRound(task, confirmTask)) {
+    clearConfirm();
     confirmTask = task;
+    confirmTimer = setTimeout(() => { clearConfirm(); render(); }, CONFIRM_TIMEOUT_MS);
     render();
     return;
   }
   if (cancelling) return;
-  confirmTask = null;
+  clearConfirm();
   cancelling = task.task_id;
   render();
   try {
@@ -627,7 +671,7 @@ function feedbackForm(task, full = false) {
   form.setAttribute("aria-label", "Evaluation for " + (task.task_title || id));
   form.addEventListener("click", event => event.stopPropagation());
   if (!full) form.addEventListener("keydown", event => {
-    if (event.key === "Escape" && confirmTask) { confirmTask = null; render(); }
+    if (event.key === "Escape" && confirmTask) { clearConfirm(); render(); }
     event.stopPropagation();
   });
   const top = node("div", "feedback-row");
@@ -644,7 +688,6 @@ function feedbackForm(task, full = false) {
   top.append(stars);
   if (full) top.append(label);
   top.append(verdict);
-  let cancelKey;
   const bottom = node("div", "feedback-row");
   const notes = node("input");
   notes.placeholder = full ? "Evaluation notes…" : "Quick note…";
@@ -667,18 +710,6 @@ function feedbackForm(task, full = false) {
     if (verdict.value !== (values.verdict || "")) verdict.value = values.verdict || "";
     if (notes.value !== (values.notes || "")) notes.value = values.notes || "";
     verdict.options[0].disabled = !!feedback.verdict;
-    const nextCancel = [task.round, live(task), sameRound(task, confirmTask), cancelling === id].join("-");
-    if (!full && cancelKey !== nextCancel) {
-      const prev = top.querySelector(".cancel");
-      const focused = prev && prev === document.activeElement;
-      prev?.remove();
-      if (live(task)) {
-        const control = cancelButton(task, true);
-        top.append(control);
-        if (focused) control.focus({preventScroll: true});
-      }
-      cancelKey = nextCancel;
-    }
     const msg = feedbackMessages.get(id);
     const busy = savingFeedback.has(id);
     save.disabled = busy;
@@ -772,21 +803,22 @@ function cardMetadata(task) {
   metric("clock", live(task) ? "Elapsed time" : "Duration", live(task) ? clockFor(task, seconds) : readableDuration(seconds));
   return strip;
 }
-function cardModel(task) {
-  const row = node("div", "card-model");
+function cardModel(task, row = node("div", "card-model")) {
+  const control = row.querySelector(".cancel");
+  while (row.firstElementChild !== control) row.firstElementChild.remove();
   const model = task.effective_model || task.model;
   const effort = task.effective_reasoning_effort || task.reasoning_effort;
   if (model) {
     const pill = node("span", "pill mono model-pill", model);
     pill.title = "Model: " + model;
-    row.append(pill);
+    row.insertBefore(pill, control);
   }
   if (effort) {
     const pill = node("span", "pill", effort);
     pill.title = "Reasoning effort: " + effort;
-    row.append(pill);
+    row.insertBefore(pill, control);
   }
-  if (!row.childElementCount) row.append(node("span", "muted", "Model —"));
+  if (!model && !effort) row.insertBefore(node("span", "muted", "Model —"), control);
   return row;
 }
 function taskCard(task, card) {
@@ -818,8 +850,18 @@ function taskCard(task, card) {
   strip.title = activity.text;
   strip.append(icon(activityIcons[activity.kind] || "clock", 13), node("span", "activity-text", activity.text),
     node("span", "pill " + task.status, chip));
-  while (card.childElementCount > 1) card.firstElementChild.remove();
-  card.prepend(header, cardMetadata(task), cardModel(task), node("p", "preview-text", task.prompt_preview || task.task_summary || "No prompt recorded."), strip);
+  const metadata = cardMetadata(task);
+  const prompt = node("p", "preview-text", task.prompt_preview || task.task_summary || "No prompt recorded.");
+  const [oldHeader, oldMetadata, model, oldPrompt, oldStrip] = card.children;
+  if (model) {
+    oldHeader.replaceWith(header);
+    oldMetadata.replaceWith(metadata);
+    cardModel(task, model);
+    oldPrompt.replaceWith(prompt);
+    oldStrip.replaceWith(strip);
+  } else {
+    card.prepend(header, metadata, cardModel(task), prompt, strip);
+  }
   return card;
 }
 function groupTitle(name, count) {
@@ -840,6 +882,7 @@ function renderCards(grid, members) {
       card.renderKey = key;
     }
     card.querySelector("form").update(task);
+    syncCancel(card.querySelector(".card-model"), task, true);
     const clock = card.querySelector("[data-clock]");
     if (clock) clock.dataset.clock = cardSeconds(task) - task.receivedAt / 1000;
     if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
@@ -1367,6 +1410,7 @@ function setSubView(next) {
   const previous = subView;
   if (previous === next) return;
   captureDisclosures(previous ? subLayer : detailView);
+  clearConfirm();
   subView = next;
   byId("sub-heading").replaceChildren();
   byId("sub-body").replaceChildren();
@@ -1390,8 +1434,9 @@ function renderDetail(task) {
     return;
   }
   captureDisclosures(detailView);
-  detailSection("detail-header", [task?.task_id, task?.task_title, task?.status, missingSelected, confirmTask?.task_id, cancelling],
+  const header = detailSection("detail-header", [task?.task_id, task?.task_title, task?.status, missingSelected],
     () => detailHeader(task), byId("detail-heading"));
+  syncCancel(header, task, false);
   if (!task) {
     detailView.replaceChildren();
     return;
@@ -1495,6 +1540,7 @@ function render() {
 
 function stop() {
   disposed = true;
+  clearConfirm();
   clearTimeout(pollTimer);
   clearInterval(tickTimer);
   resizeObserver?.disconnect();
@@ -1697,7 +1743,7 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.key !== "Escape" || event.target.closest("input, select, textarea")) return;
-  if (confirmTask) { confirmTask = null; render(); }
+  if (confirmTask) { clearConfirm(); render(); }
   else if (subView) setSubView("");
   else if (view === "detail") switchView("tasks");
 });
