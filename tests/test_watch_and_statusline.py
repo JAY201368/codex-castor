@@ -419,6 +419,152 @@ class MonitorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, script)
 
+    def test_monitor_quota_chip_is_the_rightmost_masthead_control(self):
+        chip, = [attrs for tag, attrs in self.document.tags if tag == "button" and attrs.get("id") == "quota-chip"]
+        self.assertEqual(chip["type"], "button")
+        self.assertIn("quota-chip", chip["class"].split())
+        self.assertIn("hidden", chip)
+        masthead = re.search(r'<header class="masthead">([\s\S]*?)</header>', self.html)[1]
+        self.assertRegex(masthead, r'<button id="quota-chip"[^>]*></button>\s*$')
+        self.assertNotRegex(masthead, r'id="(?:active-chip|active-dot|active|total)"')
+        self.assertRegex(self.html, r'\.quota-chip\s*\{[^}]*margin-inline-start:\s*auto;')
+        self.assertIn(".quota-window + .quota-window", self.html)
+        script, = self.document.scripts
+        for token in ('if ("quota" in data) quota = data.quota || null', 'quota: demoQuota(params.get("quota"))',
+                      'byId("quota-chip").addEventListener("click", refreshQuota)',
+                      "function render() {\n  renderQuota();\n  renderFilterCounts();"):
+            self.assertIn(token, script)
+
+    def test_monitor_filter_tabs_have_plain_initial_labels(self):
+        filters = re.search(r'<div[^>]*id="filters"[^>]*>([\s\S]*?)</div>', self.html)[1]
+        buttons = re.findall(r'<button[^>]*id="([^"]+)"[^>]*>(.*?)</button>', filters)
+        self.assertEqual([(name, re.sub(r"<[^>]+>", "", label)) for name, label in buttons],
+                         [("all", "All"), ("active-only", "Active"), ("rated", "Rated"), ("unrated", "Unrated")])
+
+    def test_monitor_quota_palette_uses_theme_colors_and_transitions(self):
+        for selector, colors in ((":root", ("#1e9e4a", "#2f7cf6", "#d99100", "#dc362e")),
+                                 (':root[data-theme="dark"]', ("#4ade80", "#60a5fa", "#facc15", "#f87171"))):
+            rules = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", self.html)[1]
+            for color, value in zip(("green", "blue", "yellow", "red"), colors):
+                self.assertIn(f"--quota-{color}: {value};", rules)
+                self.assertIn(f".quota-window.{color} {{ --quota-color: var(--quota-{color}); }}", self.html)
+        self.assertIn("transition: color 240ms ease;", self.html)
+        self.assertIn("transition: width 240ms ease, background-color 240ms ease;", self.html)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for monitor rendering verification")
+    def test_monitor_renders_filter_counts_and_refreshes_quota_windows(self):
+        script, = self.document.scripts
+        render_code = "\n".join(script[script.index(start):script.index(end)] for start, end in (
+            ("function node(", "function sourceLabel("), ("function demoQuota(", "function demoAnalytics("),
+            ("function isRated(", "function sameRound("), ("function renderFilterCounts(", "function render()"),
+        ))
+        harness = """
+const assert = require("node:assert/strict");
+function element(tag) {
+  return {tag, children: [], style: {}, attributes: {},
+    get firstElementChild() { return this.children[0]; },
+    get lastElementChild() { return this.children.at(-1); },
+    get childElementCount() { return this.children.length; },
+    append(...children) { this.children.push(...children); for (const child of children) child.parent = this; },
+    prepend(child) { this.children.unshift(child); child.parent = this; },
+    remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); },
+    setAttribute(name, value) { this.attributes[name] = value; }};
+}
+const controls = Object.fromEntries(["quota-chip", "all", "active-only", "rated", "unrated"]
+  .map(id => [id, element("button")]));
+const byId = id => controls[id];
+const chip = byId("quota-chip");
+const active = byId("active-only");
+active.append(element("span"));
+const document = {createElement: element};
+let quota = null, refreshingQuota = false, disposed = false, preview = true;
+let tasks = [], count = 0, total = 0;
+let reply;
+function call(name, args) {
+  assert.equal(name, "codex_monitor");
+  assert.deepEqual(args, {limit: 0, refresh_quota: true});
+  return new Promise(resolve => { reply = resolve; });
+}
+const toolPayload = result => result.structuredContent;
+function showNotice(message) { throw new Error(message); }
+"""
+        assertions = """
+function verifyFilterCounts() {
+  renderFilterCounts();
+  assert.equal(byId("all").textContent, "All (0)");
+  assert.equal(active.lastElementChild.textContent, "Active (0)");
+  assert.equal(active.childElementCount, 1);
+  assert.equal(byId("rated").textContent, "Rated (0)");
+  assert.equal(byId("unrated").textContent, "Unrated (0)");
+
+  tasks = [{feedback: {rating: 4}}, {feedback: {rating: 0}}, {}, {feedback: {rating: 5}}];
+  count = 1;
+  total = 8;
+  renderFilterCounts();
+  assert.equal(byId("all").textContent, "All (8)");
+  assert.equal(active.lastElementChild.textContent, "Active (1)");
+  assert.equal(active.childElementCount, 2);
+  const dot = active.firstElementChild;
+  assert.equal(dot.tag, "i");
+  assert.equal(dot.className, "dot running");
+  assert.equal(byId("rated").textContent, "Rated (2)");
+  assert.equal(byId("unrated").textContent, "Unrated (2)");
+  renderFilterCounts();
+  assert.equal(active.firstElementChild, dot);
+  count = 0;
+  renderFilterCounts();
+  assert.equal(active.lastElementChild.textContent, "Active (0)");
+  assert.equal(active.childElementCount, 1);
+}
+
+async function verifyQuota() {
+  renderQuota();
+  assert.equal(chip.hidden, true);
+  quota = demoQuota("weekly");
+  renderQuota();
+  assert.equal(chip.hidden, false);
+  assert.deepEqual(chip.children.map(item => item.children.map(child => child.textContent).slice(0, 2)),
+    [["7d", "22%"]]);
+  assert.match(chip.attributes["aria-label"], /Codex quota \\(prolite\\).*7d: 22% left \\(78% used\\).*resets /);
+  assert.match(chip.title, /Updated .*\\nClick to refresh$/);
+  quota.updated_at = "2020-01-01T00:00:00Z";
+  await refreshQuota();
+  assert.notEqual(quota.updated_at, "2020-01-01T00:00:00Z");
+
+  preview = false;
+  const refresh = refreshQuota();
+  assert.equal(chip.disabled, true);
+  reply({structuredContent: {quota: demoQuota()}});
+  await refresh;
+  assert.equal(chip.disabled, false);
+  assert.deepEqual(chip.children.map(item => [item.children[0].textContent, item.children[1].textContent,
+    item.children[2].children[0].style.width, item.className]),
+    [["5h", "84%", "84%", "quota-window green"], ["7d", "22%", "22%", "quota-window yellow"]]);
+  const item = chip.lastElementChild;
+  const fill = item.lastElementChild.firstElementChild;
+  for (const [remaining, color, width] of [[110, "green", "100%"], [75, "green", "75%"], [74.9, "blue", "74.9%"],
+      [45, "blue", "45%"], [44.9, "yellow", "44.9%"], [20, "yellow", "20%"], [19.9, "red", "19.9%"], [-1, "red", "0%"]]) {
+    quota.windows[1].remaining_percent = remaining;
+    renderQuota();
+    assert.equal(chip.lastElementChild, item);
+    assert.equal(item.lastElementChild.firstElementChild, fill);
+    assert.equal(item.className, `quota-window ${color}`);
+    assert.equal(fill.style.width, width);
+  }
+  quota = demoQuota("weekly");
+  renderQuota();
+  assert.equal(chip.childElementCount, 1);
+  quota = {windows: []};
+  renderQuota();
+  assert.equal(chip.hidden, true);
+}
+verifyFilterCounts();
+verifyQuota().catch(error => { process.stderr.write(String(error.stack)); process.exitCode = 1; });
+"""
+        result = subprocess.run(["node"], input=harness + render_code + assertions,
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_monitor_project_groups_sheets_and_polling(self):
         elements = {attrs["id"]: (tag, attrs) for tag, attrs in self.document.tags if "id" in attrs}
         self.assertEqual(elements["home-layer"][0], "main")

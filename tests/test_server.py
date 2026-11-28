@@ -24,6 +24,15 @@ MONITOR_MIME = "text/html;profile=mcp-app"
 SESSION = "01234567-89ab-cdef-0123-456789abcdef"
 USAGE = {"input_tokens": 12, "output_tokens": 4}
 TIMEOUT = 10
+WEEKLY_QUOTA = {"rateLimits": {
+    "limitId": "codex", "planType": "prolite",
+    "primary": {"usedPercent": 78, "windowDurationMins": 10080, "resetsAt": 1796148683},
+    "secondary": None,
+}}
+DUAL_QUOTA = {"rateLimits": {
+    **WEEKLY_QUOTA["rateLimits"], "planType": "pro",
+    "secondary": {"usedPercent": 16, "windowDurationMins": 300},
+}}
 MOCK_CODEX = """#!/usr/bin/env python3
 import json
 import os
@@ -32,6 +41,33 @@ import time
 from pathlib import Path
 
 args = sys.argv[1:]
+sync = Path(os.environ["MOCK_CODEX_SYNC"])
+if args[0] == "app-server":
+    assert args == ["app-server", "--listen", "stdio://"], args
+    with (sync / "quota-calls.log").open("a", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()) + "\\n")
+    initialize = json.loads(sys.stdin.readline())
+    assert initialize["id"] == 1 and initialize["method"] == "initialize"
+    assert initialize["params"]["clientInfo"]["name"] == "codex-castor"
+    assert initialize["params"]["clientInfo"]["version"]
+    print(json.dumps({"method": "fixture/unrelated"}))
+    print(json.dumps({"id": 1, "result": {}}), flush=True)
+    assert json.loads(sys.stdin.readline()) == {"method": "initialized"}
+    assert json.loads(sys.stdin.readline()) == {"id": 2, "method": "account/rateLimits/read"}
+    if os.environ.get("MOCK_CODEX_QUOTA_STALL"):
+        sys.stdout.write('{"id":2,')
+        sys.stdout.flush()
+        (sync / "quota-partial-response").touch()
+        time.sleep(60)
+    if os.environ.get("MOCK_CODEX_QUOTA_FAIL") or (sync / "quota-fail").exists():
+        print(json.dumps({"id": 2, "error": {"code": -32000, "message": "No subscription"}}), flush=True)
+    else:
+        quota_file = os.environ.get("MOCK_CODEX_QUOTA_FILE")
+        payload = (Path(quota_file).read_text(encoding="utf-8") if quota_file and Path(quota_file).is_file()
+                   else os.environ.get("MOCK_CODEX_QUOTA_JSON", "{}"))
+        print(json.dumps({"id": 2, "result": json.loads(payload)}), flush=True)
+    sys.exit(0)
+
 assert args[0] == "exec" and args[-1] == "-" and "--json" in args, args
 report_path = Path(args[args.index("-o") + 1])
 prompt = sys.stdin.read()
@@ -50,7 +86,6 @@ def wait_for(path):
             raise RuntimeError("Timed out waiting for " + str(path))
         time.sleep(0.01)
 
-sync = Path(os.environ["MOCK_CODEX_SYNC"])
 event("thread.started", thread_id=session)
 if prompt.startswith("parallel-"):
     (sync / prompt).touch()
@@ -130,6 +165,9 @@ class ServerHarness(unittest.TestCase):
         self.state = self.root / "state"
         self.sync = self.root / "sync"
         self.sync.mkdir()
+        self.mock_quota = self.sync / "quota-payload.json"
+        self.quota_calls = self.sync / "quota-calls.log"
+        self.quota_cache = self.state / "quota.json"
         self.codex_home = self.root / "codex-home"
         self.codex_home.mkdir()
         self.monitor_html = self.root / "fixture-monitor.html"
@@ -138,7 +176,8 @@ class ServerHarness(unittest.TestCase):
         fake = self.root / "mock-codex"
         fake.write_text(MOCK_CODEX, encoding="utf-8")
         fake.chmod(0o755)
-        self.env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+        self.env = {name: value for name, value in os.environ.items()
+                    if not name.startswith(("GIT_", "MOCK_CODEX_"))}
         self.env.update(
             HOME=str(home),
             USERPROFILE=str(home),
@@ -150,6 +189,7 @@ class ServerHarness(unittest.TestCase):
             CODEX_CASTOR_STATE_DIR=str(self.state),
             CODEX_CASTOR_MONITOR_HTML=str(self.monitor_html),
             MOCK_CODEX_SYNC=str(self.sync),
+            MOCK_CODEX_QUOTA_FILE=str(self.mock_quota),
         )
         self.stderr = tempfile.TemporaryFile()
         self.addCleanup(self.stderr.close)
@@ -429,6 +469,8 @@ class ServerTests(ServerHarness):
         self.assertEqual(initialized["result"]["capabilities"]["extensions"], {extension: {}})
         tools = {tool["name"]: tool for tool in self.receive(self.send("tools/list"))["result"]["tools"]}
         monitor_meta = tools["codex_monitor"]["_meta"]
+        self.assertEqual(tools["codex_monitor"]["inputSchema"]["properties"]["refresh_quota"],
+                         {"type": "boolean", "default": False})
         self.assertEqual(monitor_meta["ui"], {"resourceUri": MONITOR_URI, "visibility": ["model", "app"]})
         self.assertEqual(monitor_meta["com.google.antigravity/ui"]["entrypoints"], [
             {"type": "aux_pane", "title": "Codex Monitor"},
@@ -460,6 +502,62 @@ class ServerTests(ServerHarness):
         self.assertEqual(payload["tasks"], [])
         self.assertIsNone(payload["selected_task"])
         self.assertIn("0 active", contents)
+
+    def test_dispatch_refreshes_quota_and_monitor_reads_the_cache(self):
+        self.mock_quota.write_text(json.dumps(WEEKLY_QUOTA), encoding="utf-8")
+        task = self.call("codex_dispatch", workdir=str(self.root), spec="check quota")
+        self.assertEqual(task["status"], "completed")
+        self.await_files(self.quota_cache)
+        cached = read_json(self.quota_cache)
+        self.assertEqual(cached["windows"][0]["remaining_percent"], 22)
+        invocations = self.quota_calls.read_text().splitlines()
+        self.assertEqual(len(invocations), 1)
+
+        for _ in range(3):
+            snapshot, summary = self.monitor()
+            self.assertEqual(snapshot["quota"], cached)
+            self.assertEqual(summary.splitlines()[0], "Codex Monitor: 0 active, 1 total")
+        self.assertEqual(self.quota_calls.read_text().splitlines(), invocations)
+
+    def test_monitor_refreshes_quota_synchronously_and_preserves_cache_on_error(self):
+        self.mock_quota.write_text(json.dumps(WEEKLY_QUOTA), encoding="utf-8")
+        first, _ = self.monitor(limit=0, refresh_quota=True)
+        self.assertEqual(first["quota"], read_json(self.quota_cache))
+        self.assertEqual([window["label"] for window in first["quota"]["windows"]], ["7d"])
+
+        self.mock_quota.write_text(json.dumps(DUAL_QUOTA), encoding="utf-8")
+        second, _ = self.monitor(limit=0, refresh_quota=True)
+        self.assertEqual(second["quota"], read_json(self.quota_cache))
+        self.assertEqual([window["label"] for window in second["quota"]["windows"]], ["5h", "7d"])
+
+        (self.sync / "quota-fail").touch()
+        fallback, _ = self.monitor(limit=0, refresh_quota=True)
+        self.assertEqual(fallback["quota"], second["quota"])
+        self.assertEqual(read_json(self.quota_cache), second["quota"])
+        self.assertEqual(len(self.quota_calls.read_text().splitlines()), 3)
+
+    def test_missing_quota_is_bootstrapped_once(self):
+        (self.sync / "quota-fail").touch()
+        self.assertIsNone(self.monitor()[0]["quota"])
+        self.await_files(self.quota_calls)
+        deadline = time.monotonic() + TIMEOUT
+        while "Could not refresh Codex quota:" not in self.server_log():
+            self.assertLess(time.monotonic(), deadline, "Background quota query did not finish")
+            time.sleep(0.01)
+        for _ in range(3):
+            self.assertIsNone(self.monitor()[0]["quota"])
+        self.assertFalse(self.quota_cache.exists())
+        self.assertEqual(len(self.quota_calls.read_text().splitlines()), 1)
+
+    def test_quota_query_times_out_on_partial_reply_and_reaps_process(self):
+        server = load_server()
+        start = time.monotonic()
+        with mock.patch.dict(os.environ, {**self.env, "MOCK_CODEX_QUOTA_STALL": "1"}):
+            with self.assertRaisesRegex(TimeoutError, "quota query timed out"):
+                server.query_codex_quota(timeout=1)
+        self.assertLess(time.monotonic() - start, 4)
+        self.assertTrue((self.sync / "quota-partial-response").is_file())
+        self.assertFalse(server.is_pid_alive(int(self.quota_calls.read_text())))
 
     def test_monitor_on_demand_multi_round_detail(self):
         task = self.state / "tasks" / "review"
@@ -939,6 +1037,81 @@ class ServerTests(ServerHarness):
         first = self.call("codex_dispatch", **arguments)
         self.assertEqual(first["report"]["summary"], "Handled from an existing file")
         self.assertIn("already exists", self.call("codex_dispatch", error=True, **arguments)["error"])
+
+
+class QuotaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = load_server()
+
+    def test_window_labels(self):
+        for minutes, label in [(10080, "7d"), (1440, "1d"), (300, "5h"), (45, "45m"),
+                               (None, "secondary"), (0, "secondary"), (-1, "secondary"),
+                               (True, "secondary"), (300.0, "secondary")]:
+            with self.subTest(minutes=minutes):
+                self.assertEqual(self.server.format_quota_window_label(minutes, "secondary"), label)
+
+    def test_normalizes_weekly_only_window(self):
+        updated_at = "2026-11-28T10:00:00Z"
+        self.assertEqual(self.server.normalize_quota_payload(WEEKLY_QUOTA, updated_at=updated_at), {
+            "updated_at": updated_at, "limit_id": "codex", "plan_type": "prolite", "windows": [{
+                "slot": "primary", "label": "7d", "used_percent": 78, "remaining_percent": 22,
+                "window_duration_mins": 10080, "resets_at": 1796148683,
+            }],
+        })
+
+    def test_sorts_dual_windows_by_duration(self):
+        windows = self.server.normalize_quota_payload(DUAL_QUOTA)["windows"]
+        self.assertEqual([(w["slot"], w["label"], w["remaining_percent"]) for w in windows],
+                         [("secondary", "5h", 84), ("primary", "7d", 22)])
+
+    def test_selects_codex_bucket_then_first_valid_bucket_then_fallback(self):
+        by_limit_id = {"other": {"primary": {"usedPercent": 80}}, "codex": WEEKLY_QUOTA["rateLimits"]}
+        payload = {**DUAL_QUOTA, "rateLimitsByLimitId": by_limit_id}
+        self.assertEqual(self.server.normalize_quota_payload(payload)["plan_type"], "prolite")
+        by_limit_id["codex"] = {"primary": {"usedPercent": True}}
+        alternative = self.server.normalize_quota_payload(payload)
+        self.assertEqual(alternative["limit_id"], "other")
+        self.assertEqual(alternative["windows"][0]["remaining_percent"], 20)
+        by_limit_id["other"] = None
+        self.assertEqual(self.server.normalize_quota_payload(payload)["plan_type"], "pro")
+
+    def test_validates_window_numbers_and_optional_fields(self):
+        payload = {"rateLimits": {
+            "limitId": " ", "planType": 123,
+            "primary": {"usedPercent": -12, "windowDurationMins": True, "resetsAt": False},
+            "secondary": {"usedPercent": 25.35, "windowDurationMins": 60, "resetsAt": 123.8},
+        }}
+        quota = self.server.normalize_quota_payload(payload)
+        self.assertEqual(quota["limit_id"], "codex")
+        self.assertIsNone(quota["plan_type"])
+        self.assertEqual(quota["windows"], [
+            {"slot": "secondary", "label": "1h", "used_percent": 25.35, "remaining_percent": 74.7,
+             "window_duration_mins": 60, "resets_at": 123},
+            {"slot": "primary", "label": "primary", "used_percent": 0, "remaining_percent": 100,
+             "window_duration_mins": None, "resets_at": None},
+        ])
+        payload["rateLimits"]["primary"]["usedPercent"] = 103
+        primary = self.server.normalize_quota_payload(payload)["windows"][-1]
+        self.assertEqual((primary["used_percent"], primary["remaining_percent"]), (100, 0))
+
+    def test_missing_or_invalid_payload_returns_none(self):
+        for payload in (None, [], {}, {"rateLimits": "unavailable"},
+                        {"rateLimits": {"primary": [], "secondary": {"usedPercent": "78"}}},
+                        {"rateLimits": {"primary": {"usedPercent": True}}},
+                        {"rateLimits": {"primary": {"usedPercent": float("nan")}}}):
+            with self.subTest(payload=payload):
+                self.assertIsNone(self.server.normalize_quota_payload(payload))
+
+    def test_cache_path_uses_current_state_root(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(self.server, "STATE_ROOT", Path(directory)):
+            cache_path = Path(directory) / "quota.json"
+            self.assertEqual(self.server.quota_cache_path(), cache_path)
+            cache_path.write_text('{"windows": []}', encoding="utf-8")
+            self.assertIsNone(self.server.load_cached_quota())
+            normalized = self.server.normalize_quota_payload(WEEKLY_QUOTA)
+            cache_path.write_text(json.dumps(normalized), encoding="utf-8")
+            self.assertEqual(self.server.load_cached_quota(), normalized)
 
 
 class FailureSummaryTests(unittest.TestCase):

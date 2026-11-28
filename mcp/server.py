@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import os
 import re
 import select
@@ -45,6 +46,11 @@ MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui"
 STATE_ROOT = telemetry.default_state_root()
 TASKS_ROOT = STATE_ROOT / "tasks"
 WORKTREES_ROOT = STATE_ROOT / "worktrees"
+QUOTA_PATH = STATE_ROOT / "quota.json"
+QUOTA_LOCK = threading.Lock()
+QUOTA_REFRESH_DONE = threading.Condition(QUOTA_LOCK)
+QUOTA_REFRESH_IN_FLIGHT = False
+QUOTA_BOOTSTRAP_ATTEMPTED = False
 
 STDOUT_LOCK = threading.Lock()
 LOG_LEVEL_LOCK = threading.Lock()
@@ -172,6 +178,71 @@ def codex_home_dir() -> Path:
 def nonempty_string(value: Any) -> Optional[str]:
     if isinstance(value, str):
         return value.strip() or None
+    return None
+
+
+def quota_cache_path() -> Path:
+    return STATE_ROOT / QUOTA_PATH.name
+
+
+def format_quota_window_label(duration_mins: Optional[int], slot: str) -> str:
+    if type(duration_mins) is not int or duration_mins <= 0:
+        return slot
+    if duration_mins % 1440 == 0:
+        return f"{duration_mins // 1440}d"
+    if duration_mins % 60 == 0:
+        return f"{duration_mins // 60}h"
+    return f"{duration_mins}m"
+
+
+def normalize_quota_payload(payload: Any, *, updated_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+
+    def number(value: Any) -> bool:
+        return type(value) is int or (type(value) is float and math.isfinite(value))
+
+    def extract_windows(bucket: Any) -> List[Dict[str, Any]]:
+        windows = []
+        if not isinstance(bucket, dict):
+            return windows
+        for slot in ("primary", "secondary"):
+            window = bucket.get(slot)
+            if not isinstance(window, dict) or not number(window.get("usedPercent")):
+                continue
+            used = max(0, min(100, window["usedPercent"]))
+            remaining = round(100.0 - used, 1)
+            duration_mins = window.get("windowDurationMins")
+            if type(duration_mins) is not int or duration_mins <= 0:
+                duration_mins = None
+            resets_at = window.get("resetsAt")
+            windows.append({
+                "slot": slot,
+                "label": format_quota_window_label(duration_mins, slot),
+                "used_percent": int(used) if used == int(used) else used,
+                "remaining_percent": int(remaining) if remaining == int(remaining) else remaining,
+                "window_duration_mins": duration_mins,
+                "resets_at": int(resets_at) if number(resets_at) else None,
+            })
+        return windows
+
+    candidates = []
+    by_limit_id = payload.get("rateLimitsByLimitId")
+    if isinstance(by_limit_id, dict) and by_limit_id:
+        candidates.append(("codex", by_limit_id.get("codex")))
+        candidates.extend((limit_id, bucket) for limit_id, bucket in by_limit_id.items() if limit_id != "codex")
+    candidates.append(("codex", payload.get("rateLimits")))
+    for limit_id, bucket in candidates:
+        windows = extract_windows(bucket)
+        if windows:
+            windows.sort(key=lambda w: (w["window_duration_mins"] is None, w["window_duration_mins"] or 0,
+                                        0 if w["slot"] == "primary" else 1))
+            return {
+                "updated_at": updated_at or utc_now_iso(),
+                "limit_id": nonempty_string(bucket.get("limitId")) or limit_id,
+                "plan_type": nonempty_string(bucket.get("planType")),
+                "windows": windows,
+            }
     return None
 
 
@@ -403,6 +474,120 @@ def terminate_process_group(proc: Optional[subprocess.Popen], pid: Optional[int]
         except Exception:
             pass
     return sent
+
+
+def query_codex_quota(timeout: float = 8.0) -> Optional[Dict[str, Any]]:
+    deadline = time.monotonic() + timeout
+    proc = subprocess.Popen(
+        [resolve_codex_bin(), "app-server", "--listen", "stdio://"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=build_env(),
+        start_new_session=True,
+        bufsize=0,
+    )
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+    streams = [proc.stdout, proc.stderr]
+    pending = b""
+
+    def send(message: Dict[str, Any]) -> None:
+        proc.stdin.write(json.dumps(message).encode("utf-8") + b"\n")
+
+    def read_reply(request_id: int) -> Any:
+        nonlocal pending
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Codex app-server quota query timed out")
+            # A readable pipe can contain a partial line. Read chunks so the deadline still applies.
+            line, separator, rest = pending.partition(b"\n")
+            if separator:
+                pending = rest
+                try:
+                    reply = json.loads(line)
+                except (ValueError, UnicodeError):
+                    continue
+                if isinstance(reply, dict) and reply.get("id") == request_id:
+                    if "error" in reply:
+                        raise RuntimeError(f"Codex app-server request {request_id}: {reply['error']}")
+                    return reply.get("result")
+                continue
+
+            ready, _, _ = select.select(streams, [], [], remaining)
+            if not ready:
+                raise TimeoutError("Codex app-server quota query timed out")
+            for stream in ready:
+                chunk = stream.read(65536)
+                if stream is proc.stdout:
+                    if not chunk:
+                        raise RuntimeError("Codex app-server closed stdout before replying")
+                    pending += chunk
+                elif not chunk:
+                    streams.remove(stream)
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {"clientInfo": {
+            "name": SERVER_NAME, "version": SERVER_VERSION,
+        }}})
+        read_reply(1)
+        send({"method": "initialized"})
+        send({"id": 2, "method": "account/rateLimits/read"})
+        return normalize_quota_payload(read_reply(2))
+    finally:
+        proc.stdin.close()
+        proc.stdout.close()
+        proc.stderr.close()
+        if proc.poll() is None:
+            terminate_process_group(proc)
+        proc.wait(timeout=2)
+
+
+def load_cached_quota() -> Optional[Dict[str, Any]]:
+    data = read_json_safe(quota_cache_path())
+    if data and isinstance(data.get("windows"), list) and data["windows"]:
+        return data
+    return None
+
+
+def refresh_codex_quota(*, wait: bool = False, timeout: float = 8.0) -> Optional[Dict[str, Any]]:
+    global QUOTA_REFRESH_IN_FLIGHT
+
+    def release() -> None:
+        global QUOTA_REFRESH_IN_FLIGHT
+        with QUOTA_REFRESH_DONE:
+            QUOTA_REFRESH_IN_FLIGHT = False
+            QUOTA_REFRESH_DONE.notify_all()
+
+    def worker() -> Optional[Dict[str, Any]]:
+        try:
+            quota = query_codex_quota(timeout=timeout)
+            if quota is not None:
+                telemetry.write_meta(quota_cache_path(), quota)
+                return quota
+        except Exception as exc:
+            log_err(f"Could not refresh Codex quota: {exc}")
+        finally:
+            release()
+        return None
+
+    with QUOTA_REFRESH_DONE:
+        if QUOTA_REFRESH_IN_FLIGHT:
+            if not wait:
+                return None
+            # Share a refresh that already started, including its process teardown.
+            QUOTA_REFRESH_DONE.wait_for(lambda: not QUOTA_REFRESH_IN_FLIGHT, timeout=timeout + 5.0)
+            return load_cached_quota()
+        QUOTA_REFRESH_IN_FLIGHT = True
+
+    if wait:
+        return worker() or load_cached_quota()
+    try:
+        threading.Thread(target=worker, name="codex-quota", daemon=True).start()
+    except RuntimeError as exc:
+        release()
+        log_err(f"Could not refresh Codex quota: {exc}")
+    return None
 
 
 def collect_git_summary(workdir: Path, base_commit: Optional[str] = None) -> Dict[str, Any]:
@@ -889,6 +1074,7 @@ def execute_codex_round(
         result_payload["errors"] = fatal_errors[-5:]
     if stderr_tail:
         result_payload["stderr_tail"] = stderr_tail
+    refresh_codex_quota(wait=False)
     return result_payload
 
 
@@ -1599,6 +1785,7 @@ def handle_codex_status(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
 
 
 def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    global QUOTA_BOOTSTRAP_ATTEMPTED
     limit = task_limit(args)
     selected_id = sanitize_task_id(str(args["task_id"])) if args.get("task_id") else None
     tasks = list_task_metadata()
@@ -1624,6 +1811,17 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
                 if args.get("include_detail"):
                     detail = build_task_detail(task_dir, meta, alive, selected, by_task_id.get(task_id))
 
+    if args.get("refresh_quota"):
+        quota = refresh_codex_quota(wait=True)
+    else:
+        quota = load_cached_quota()
+        if quota is None:
+            with QUOTA_LOCK:
+                bootstrap = not QUOTA_BOOTSTRAP_ATTEMPTED
+                QUOTA_BOOTSTRAP_ATTEMPTED = True
+            if bootstrap:
+                refresh_codex_quota(wait=False)
+
     active_count = sum(alive for _, _, alive in tasks)
     result = {
         "server_time": utc_now_iso(),
@@ -1632,6 +1830,7 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
         "tasks": summaries,
         "selected_task": selected,
         "analytics": telemetry.compute_analytics(records),
+        "quota": quota,
         "telemetry_dir": os.environ.get("CODEX_CASTOR_STATE_DIR", "~/.gemini/codex-castor"),
     }
     lines = [f"Codex Monitor: {active_count} active, {len(tasks)} total"]
@@ -1964,6 +2163,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 0, "default": 20},
                 "include_detail": {"type": "boolean", "default": False},
+                "refresh_quota": {"type": "boolean", "default": False},
             },
         },
     },

@@ -24,6 +24,10 @@
   --warning: var(--color-text-warning, var(--fb-warning));
   --danger: var(--color-text-danger, var(--fb-danger));
   --danger-ink: #ffffff;
+  --quota-green: #1e9e4a;
+  --quota-blue: #2f7cf6;
+  --quota-yellow: #d99100;
+  --quota-red: #dc362e;
   --ring: var(--color-ring-primary, var(--accent));
   --wash: color-mix(in srgb, var(--accent) 10%, transparent);
   --good: color-mix(in srgb, var(--success) 10%, transparent);
@@ -40,6 +44,10 @@
   --fb-border: #394351; --fb-border-2: #303946;
   --fb-accent: #60a5fa; --fb-success: #4ade80; --fb-warning: #fbbf24; --fb-danger: #f87171;
   --danger-ink: #12161d;
+  --quota-green: #4ade80;
+  --quota-blue: #60a5fa;
+  --quota-yellow: #facc15;
+  --quota-red: #f87171;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -60,16 +68,28 @@ input::placeholder { color: var(--muted); }
 ::selection { background: var(--wash); color: var(--text); }
 svg { flex: none; vertical-align: middle; }
 .mono, code, pre, time, .metric-value, td.numeric { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.masthead, .toolbar, .section-head, .row, .brand, .counts, .group, .status, .activity, .stars,
+.masthead, .toolbar, .section-head, .row, .brand, .group, .status, .activity, .stars,
 .detail-bar, .title-row, .feedback-row, .chips, .stream-heading, .icon-button { display: flex; align-items: center; gap: 8px; }
 .masthead, .toolbar, .section-head { justify-content: space-between; }
-.masthead { min-height: 58px; border-bottom: 1px solid var(--line); background-image: var(--dots); background-size: 8px 8px; }
+.masthead { min-height: 58px; padding-block: 6px; flex-wrap: wrap; align-content: center; row-gap: 6px;
+  border-bottom: 1px solid var(--line); background-image: var(--dots); background-size: 8px 8px; }
 .brand { gap: 9px; } .mark { color: var(--accent); }
-.counts { gap: 10px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .pill, .status { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 5px;
   white-space: nowrap; flex: none;
   background: var(--subtle); color: var(--secondary); font-size: 11px; font-weight: 550; line-height: 1.5; }
-.counts .status { padding: 8px 10px; border-radius: 20px; line-height: 1; }
+.quota-chip { display: inline-flex; align-items: center; flex-wrap: wrap; row-gap: 4px; max-width: 100%; margin-inline-start: auto;
+  padding: 3px 9px; border-radius: 20px; font-size: 11px; line-height: 1.2; }
+.quota-window { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  color: var(--quota-color); transition: color 240ms ease; }
+.quota-window + .quota-window { border-inline-start: 1px solid var(--border); margin-inline-start: 7px; padding-inline-start: 7px; }
+.quota-window.green { --quota-color: var(--quota-green); }
+.quota-window.blue { --quota-color: var(--quota-blue); }
+.quota-window.yellow { --quota-color: var(--quota-yellow); }
+.quota-window.red { --quota-color: var(--quota-red); }
+.quota-label { color: var(--secondary); }
+.quota-meter { width: 24px; height: 4px; border-radius: 4px; overflow: hidden; background: var(--line); }
+.quota-fill { display: block; height: 100%; border-radius: inherit; background-color: var(--quota-color);
+  transition: width 240ms ease, background-color 240ms ease; }
 .running, .starting, .info { color: var(--accent); background-color: var(--wash); }
 .completed, .saved { color: var(--success); background-color: var(--good); }
 .failed, .error { color: var(--danger); background-color: var(--bad); }
@@ -84,7 +104,9 @@ svg { flex: none; vertical-align: middle; }
 .primary button { min-height: 32px; font-size: 13px; padding-inline: 14px; }
 .small-group { padding: 2px; } .small-group button { font-size: 11.5px; min-height: 22px; padding: 1px 7px; }
 #filters { background: transparent; padding: 0; gap: 0; margin-inline-start: auto; max-width: 100%; flex-wrap: wrap; }
-#filters button { background: var(--subtle); min-height: 26px; padding: 6px 9px; line-height: 12px; border-radius: 0; white-space: nowrap; }
+#filters button { display: inline-flex; align-items: center; gap: 5px; background: var(--subtle);
+  min-height: 26px; padding: 6px 9px; line-height: 12px; border-radius: 0; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
 #filters button:first-child { border-radius: 6px 0 0 6px; }
 #filters button:last-child { border-radius: 0 6px 6px 0; }
 #filters button[aria-pressed="true"] { background: var(--surface); }
@@ -234,7 +256,8 @@ code, pre { font-size: .94em; } pre { white-space: pre-wrap; overflow-wrap: anyw
   .kpis { grid-template-columns: repeat(6,minmax(0,1fr)); }
 }
 @media (max-width: 360px) {
-  .masthead .brand, .counts { gap: 4px; }
+  .masthead .brand { gap: 4px; }
+  #filters button { padding-inline: 7px; }
   .task-card { padding-inline: 10px; } .cancel { padding-inline: 5px; }
   .panel { padding: 11px; }
 }
@@ -253,7 +276,7 @@ code, pre { font-size: .94em; } pre { white-space: pre-wrap; overflow-wrap: anyw
       </svg>
       <h1>Codex Castor</h1><span id="preview" class="pill" hidden>Preview</span>
     </div>
-    <div class="counts"><span id="active-chip" class="status"><i id="active-dot" class="dot"></i><span id="active">0 active</span></span><span id="total">0 total</span></div>
+    <button id="quota-chip" type="button" class="quota-chip" hidden></button>
   </header>
   <div class="toolbar" id="toolbar">
     <div class="group primary" role="group" aria-label="View">
@@ -262,7 +285,7 @@ code, pre { font-size: .94em; } pre { white-space: pre-wrap; overflow-wrap: anyw
     </div>
     <div class="group small-group" id="filters" role="group" aria-label="Filter tasks">
       <button type="button" id="all" aria-pressed="true">All</button>
-      <button type="button" id="active-only" aria-pressed="false">Active</button>
+      <button type="button" id="active-only" aria-pressed="false"><span>Active</span></button>
       <button type="button" id="rated" aria-pressed="false">Rated</button>
       <button type="button" id="unrated" aria-pressed="false">Unrated</button>
     </div>
@@ -323,6 +346,8 @@ let count = 0;
 let total = 0;
 let tasks = [];
 let analytics;
+let quota = null;
+let refreshingQuota = false;
 let telemetryDir = "~/.gemini/codex-castor";
 let view = "tasks";
 const CONFIRM_TIMEOUT_MS = 4000;
@@ -439,6 +464,7 @@ function setSnapshot(data, {detailOnly = false} = {}) {
   count = data.active_count ?? tasks.filter(live).length;
   total = data.total ?? tasks.length;
   analytics = data.analytics;
+  if ("quota" in data) quota = data.quota || null;
   telemetryDir = data.telemetry_dir || telemetryDir;
   if (data.task_detail?.task_id === selected) detail = data.task_detail;
   else if (detailOnly && data.selected_task?.task_id === selected) detail = summaryDetail(data.selected_task);
@@ -491,6 +517,68 @@ function node(tag, className, text) {
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+function renderQuota() {
+  const chip = byId("quota-chip");
+  const windows = Array.isArray(quota?.windows)
+    ? quota.windows.filter(window => Number.isFinite(window?.remaining_percent)) : [];
+  chip.hidden = windows.length === 0;
+  chip.disabled = refreshingQuota;
+  while (chip.childElementCount > windows.length) chip.lastElementChild.remove();
+  if (chip.hidden) return;
+
+  const tooltip = [quota.plan_type ? `Codex quota (${quota.plan_type})` : "Codex quota"];
+  windows.forEach((window, index) => {
+    const remaining = Math.max(0, Math.min(100, window.remaining_percent));
+    const color = remaining >= 75 ? "green" : remaining >= 45 ? "blue" : remaining >= 20 ? "yellow" : "red";
+    let item = chip.children[index];
+    if (!item) {
+      item = node("span", "quota-window");
+      const meter = node("span", "quota-meter");
+      meter.append(node("span", "quota-fill"));
+      item.append(node("span", "quota-label"), node("span", "mono"), meter);
+      chip.append(item);
+    }
+    const [label, percentage, meter] = item.children;
+    item.className = `quota-window ${color}`;
+    label.textContent = window.label;
+    percentage.textContent = `${remaining}%`;
+    meter.firstElementChild.style.width = `${remaining}%`;
+
+    const reset = new Date(window.resets_at * 1000);
+    const resetText = Number.isFinite(window.resets_at) && Number.isFinite(reset.getTime())
+      ? `, resets ${reset.toLocaleString()}` : "";
+    tooltip.push(`${window.label}: ${remaining}% left (${window.used_percent}% used)${resetText}`);
+  });
+  const updated = new Date(quota.updated_at);
+  if (Number.isFinite(Date.parse(quota.updated_at))) tooltip.push(`Updated ${updated.toLocaleString()}`);
+  tooltip.push(refreshingQuota ? "Refreshing quota…" : "Click to refresh");
+  chip.title = tooltip.join("\n");
+  chip.setAttribute("aria-label", tooltip.join(". "));
+}
+
+async function refreshQuota() {
+  if (!quota || refreshingQuota || disposed) return;
+  if (preview) {
+    quota.updated_at = new Date().toISOString();
+    renderQuota();
+    return;
+  }
+
+  refreshingQuota = true;
+  renderQuota();
+  try {
+    const result = await call("codex_monitor", {limit: 0, refresh_quota: true});
+    if (disposed) return;
+    if (result?.isError) throw new Error(result.content?.[0]?.text || "Tool call failed");
+    quota = toolPayload(result)?.quota || null;
+  } catch (error) {
+    if (!disposed) showNotice(`Quota update failed. ${error.message}`);
+  } finally {
+    refreshingQuota = false;
+    if (!disposed) renderQuota();
+  }
 }
 
 function sourceLabel(source) {
@@ -1516,11 +1604,28 @@ function renderAnalytics() {
   }
 }
 
+function renderFilterCounts() {
+  const ratedCount = tasks.filter(isRated).length;
+  const unratedCount = tasks.filter(task => !isRated(task)).length;
+  byId("all").textContent = `All (${total})`;
+  byId("rated").textContent = `Rated (${ratedCount})`;
+  byId("unrated").textContent = `Unrated (${unratedCount})`;
+
+  const active = byId("active-only");
+  active.lastElementChild.textContent = `Active (${count})`;
+  const hasDot = active.childElementCount > 1;
+  if (count > 0 && !hasDot) {
+    const dot = node("i", "dot running");
+    dot.setAttribute("aria-hidden", "true");
+    active.prepend(dot);
+  } else if (count === 0 && hasDot) {
+    active.firstElementChild.remove();
+  }
+}
+
 function render() {
-  byId("active").textContent = count + " active";
-  byId("total").textContent = total + " total";
-  byId("active-dot").classList.toggle("running", count > 0);
-  byId("active-chip").classList.toggle("info", count > 0);
+  renderQuota();
+  renderFilterCounts();
   const overlay = view === "detail";
   homeLayer.inert = overlay;
   detailLayer.inert = !!subView;
@@ -1528,7 +1633,6 @@ function render() {
   subLayer.hidden = !subView;
   document.body.classList.toggle("overlay-open", overlay);
   byId("filters").hidden = view === "analytics";
-  byId("active-only").textContent = count ? "Active (" + count + ")" : "Active";
   for (const name of taskFilters) pressed(byId(name), filter === name);
   pressed(byId("show-tasks"), view !== "analytics"); pressed(byId("show-analytics"), view === "analytics");
   tasksView.hidden = view === "analytics"; analyticsView.hidden = view !== "analytics";
@@ -1599,6 +1703,17 @@ window.addEventListener("message", event => {
     else request.resolve(msg.result);
   }
 });
+
+function demoQuota(mode) {
+  const now = Date.now();
+  const seconds = Math.floor(now / 1000);
+  const weekly = {slot: mode === "weekly" ? "primary" : "secondary", label: "7d", used_percent: 78,
+    remaining_percent: 22, window_duration_mins: 10080, resets_at: seconds + 190800};
+  const hourly = {slot: "primary", label: "5h", used_percent: 16,
+    remaining_percent: 84, window_duration_mins: 300, resets_at: seconds + 11520};
+  return {updated_at: new Date(now).toISOString(), limit_id: "codex", plan_type: mode === "weekly" ? "prolite" : "pro",
+    windows: mode === "weekly" ? [weekly] : [hourly, weekly]};
+}
 
 function demoAnalytics(sample) {
   const settled = sample.filter(task => !live(task) && task.status !== "failed");
@@ -1726,6 +1841,7 @@ function demoDetail(task) {
     stderr_tail: task.status === "failed" ? "FileNotFoundError: fixtures/monthly.jsonl\nExport check exited with code 1." : ""};
 }
 
+byId("quota-chip").addEventListener("click", refreshQuota);
 for (const name of ["tasks", "analytics"]) byId("show-" + name).addEventListener("click", () => switchView(name));
 for (const name of taskFilters) byId(name).addEventListener("click", () => {
   filter = name; render();
@@ -1763,7 +1879,8 @@ if (preview) {
   media.addEventListener("change", applyTheme);
   applyTheme();
   const sample = demoTasks();
-  setSnapshot({server_time: new Date().toISOString(), tasks: sample, analytics: demoAnalytics(sample)});
+  setSnapshot({server_time: new Date().toISOString(), tasks: sample, analytics: demoAnalytics(sample),
+    quota: demoQuota(params.get("quota"))});
   if (sample.some(t => t.task_id === params.get("task"))) {
     switchView("detail", params.get("task"));
     if (["prompt", "stream"].includes(params.get("sub"))) setSubView(params.get("sub"));
