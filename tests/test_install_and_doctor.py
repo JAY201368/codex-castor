@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,9 @@ OTHER_CONFIG = {
     "preferences": {"unicode": "用户"},
     "mcpServers": {"other-mcp": {"command": "other", "args": ["--hello"]}},
 }
+OTHER_HOOKS = {
+    "impeccable": {"PreInvocation": [{"type": "command", "command": "other-hook", "timeout": 15}]},
+}
 
 
 def read_json(path):
@@ -44,9 +48,11 @@ class ScriptTests(unittest.TestCase):
         self.root = Path(directory.name).resolve()
         self.home = self.root / "home"
         self.home.mkdir()
-        self.gemini = self.home / "Gemini with spaces"
+        self.gemini = self.home / "Gemini's config"
         self.config = self.gemini / "config" / "mcp_config.json"
         self.backup = self.config.with_suffix(".json.bak")
+        self.hooks = self.config.with_name("hooks.json")
+        self.hooks_backup = self.hooks.with_suffix(".json.bak")
         self.rules = self.gemini / "GEMINI.md"
         self.cli_settings = self.gemini / "antigravity-cli" / "settings.json"
         self.state = self.gemini / "codex-castor"
@@ -56,6 +62,7 @@ class ScriptTests(unittest.TestCase):
             self.install_dir / "server.py": ROOT / "mcp" / "server.py",
             self.install_dir / "telemetry.py": ROOT / "mcp" / "telemetry.py",
             self.install_dir / "analytics.py": ROOT / "scripts" / "analytics.py",
+            self.install_dir / "hook.py": ROOT / "scripts" / "hook.py",
             self.install_dir / "report.schema.json": ROOT / "mcp" / "report.schema.json",
             self.skill / "SKILL.md": ROOT / "skills" / "codex-orchestrator" / "SKILL.md",
         }
@@ -106,6 +113,33 @@ class ScriptTests(unittest.TestCase):
         self.config.write_bytes(original)
         return original
 
+    def seed_user_hooks(self):
+        self.hooks.parent.mkdir(parents=True, exist_ok=True)
+        original = json.dumps(OTHER_HOOKS).encode("utf-8")
+        self.hooks.write_bytes(original)
+        return original
+
+    def run_installed_hook(self, python):
+        target = self.install_dir / "hook.py"
+        hook = shlex.quote(str(target))
+        expected = {"PreInvocation": [{
+            "type": "command", "command": f"[ ! -f {hook} ] || {shlex.quote(str(python))} {hook}", "timeout": 5,
+        }]}
+        actual = read_json(self.hooks)["codex-castor"]
+        self.assertEqual(actual, expected)
+        transcript = self.root / "transcript.jsonl"
+        transcript.touch()
+        payload = {"conversationId": "install-test", "transcriptPath": str(transcript), "hookEventName": "PreInvocation"}
+        result = subprocess.run(
+            ["/bin/sh", "-c", actual["PreInvocation"][0]["command"]],
+            env=self.env, cwd=self.root, input=json.dumps(payload), text=True, capture_output=True, timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "{}\n")
+        self.assertEqual(result.stderr, "")
+        state = Path(self.env["CODEX_CASTOR_STATE_DIR"]) / "hook_state" / "install-test.json"
+        self.assertEqual(read_json(state)["transcript_path"], str(transcript))
+
     def installer_with_ui_assets(self):
         repo = self.root / "fixture-sources"
         for source in (INSTALL, RULES_SOURCE, *self.artifacts.values()):
@@ -139,6 +173,8 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual((self.install_dir / "telemetry.py").stat().st_mode & 0o777, 0o644)
         analytics = self.install_dir / "analytics.py"
         self.assertEqual(analytics.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.install_dir / "hook.py").stat().st_mode & 0o777, 0o755)
+        self.run_installed_hook(python)
         result = subprocess.run([str(analytics), "--help"], cwd=self.root, env=self.env, capture_output=True,
                                 text=True, timeout=5, check=True)
         self.assertIn("{summary,backfill,feedback,export}", result.stdout)
@@ -153,6 +189,7 @@ class ScriptTests(unittest.TestCase):
         expected_rules = f"{START}\n{RULES_SOURCE.read_text().rstrip()}\n{END}\n"
         self.assertEqual(self.rules.read_text(), expected_rules)
         self.assertFalse(self.backup.exists())
+        self.assertFalse(self.hooks_backup.exists())
 
     def test_default_python_keeps_virtual_environment_and_path_finds_codex(self):
         env = {key: value for key, value in self.env.items() if key != "CODEX_BIN"}
@@ -166,6 +203,7 @@ class ScriptTests(unittest.TestCase):
 
     def test_merge_backup_and_second_install_are_idempotent(self):
         previous_config = self.seed_user_config()
+        previous_hooks = self.seed_user_hooks()
         user_rules = b"# My rules\r\nKeep existing whitespace.  \r\n"
         self.rules.write_bytes(user_rules)
         self.run_script(INSTALL)
@@ -173,6 +211,10 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(installed["preferences"], OTHER_CONFIG["preferences"])
         self.assertEqual(installed["mcpServers"]["other-mcp"], OTHER_CONFIG["mcpServers"]["other-mcp"])
         self.assertEqual(self.backup.read_bytes(), previous_config)
+        installed_hooks = read_json(self.hooks)
+        self.assertIn("codex-castor", installed_hooks)
+        self.assertEqual({name: entry for name, entry in installed_hooks.items() if name != "codex-castor"}, OTHER_HOOKS)
+        self.assertEqual(self.hooks_backup.read_bytes(), previous_hooks)
         self.assertTrue(self.rules.read_bytes().startswith(user_rules + b"\n\n"))
         snapshot = self.snapshot()
         self.run_script(INSTALL)
@@ -199,11 +241,19 @@ class ScriptTests(unittest.TestCase):
         self.run_script(INSTALL, "--uninstall")
         self.assertFalse(self.rules.exists())
 
+    def test_previous_unmarked_rules_are_upgraded_without_stale_reply_instructions(self):
+        installer = load_module(INSTALL)
+        self.gemini.mkdir()
+        self.rules.write_text(RULES_SOURCE.read_text() + installer.LEGACY_REPLY_RULE + "\n", encoding="utf-8")
+        self.run_script(INSTALL)
+        self.assertEqual(self.rules.read_text(), f"{START}\n{RULES_SOURCE.read_text()}{END}\n")
+
     def test_wrapper_and_symlink_mode_can_switch_back_to_copies(self):
         self.run_script(WRAPPER, "--symlink", "--skip-gemini-md", "--python", sys.executable)
         for target, source in self.artifacts.items():
             self.assertTrue(target.is_symlink())
             self.assertEqual(target.resolve(), source)
+        self.run_installed_hook(sys.executable)
         snapshot = self.snapshot()
         self.run_script(INSTALL, "--symlink", "--skip-gemini-md", "--python", sys.executable)
         self.assertEqual(self.snapshot(), snapshot)
@@ -219,13 +269,16 @@ class ScriptTests(unittest.TestCase):
         fresh = self.run_script(INSTALL, "--dry-run")
         self.assertIn("Dry run", fresh.stdout)
         self.assertIn(str(self.config), fresh.stdout)
+        self.assertIn(str(self.hooks), fresh.stdout)
         self.assertFalse(self.gemini.exists())
 
         self.seed_user_config()
+        self.seed_user_hooks()
         self.rules.write_text("Personal rules\n", encoding="utf-8")
         original = self.snapshot()
         plan = self.run_script(INSTALL, "--dry-run", "--symlink")
         self.assertIn(str(self.backup), plan.stdout)
+        self.assertIn(str(self.hooks_backup), plan.stdout)
         self.assertEqual(self.snapshot(), original)
         self.run_script(INSTALL)
         self.state.mkdir()
@@ -236,17 +289,21 @@ class ScriptTests(unittest.TestCase):
 
     def test_uninstall_keeps_other_entries_and_state_then_purges_explicitly(self):
         self.seed_user_config()
+        self.seed_user_hooks()
         user_rules = "Personal rules  \n"
         self.rules.write_text(user_rules, encoding="utf-8")
         self.install_state()
         self.run_script(INSTALL, "--symlink")
         previous_config = self.config.read_bytes()
+        previous_hooks = self.hooks.read_bytes()
         result = self.run_script(INSTALL, "--uninstall")
         self.assertIn("Runtime state preserved", result.stdout)
         self.assertFalse(self.install_dir.exists())
         self.assertFalse(self.skill.exists())
         self.assertEqual(read_json(self.config), OTHER_CONFIG)
         self.assertEqual(self.backup.read_bytes(), previous_config)
+        self.assertEqual(read_json(self.hooks), OTHER_HOOKS)
+        self.assertEqual(self.hooks_backup.read_bytes(), previous_hooks)
         self.assertEqual(self.rules.read_text(), user_rules)
         self.assertTrue((self.state / "tasks" / "task.json").is_file())
 
@@ -344,6 +401,17 @@ class ScriptTests(unittest.TestCase):
                     self.assertIn(str(self.config), result.stderr)
                     self.assertEqual(self.snapshot(), snapshot)
 
+    def test_invalid_hooks_json_aborts_install_and_uninstall_before_any_changes(self):
+        self.run_script(INSTALL)
+        for invalid in (b"{broken", b'{"other": NaN}', b"[]"):
+            for flags in (("--symlink",), ("--uninstall", "--purge-state")):
+                with self.subTest(invalid=invalid, flags=flags):
+                    self.hooks.write_bytes(invalid)
+                    snapshot = self.snapshot()
+                    result = self.run_script(INSTALL, *flags, expected=1)
+                    self.assertIn(str(self.hooks), result.stderr)
+                    self.assertEqual(self.snapshot(), snapshot)
+
     def test_missing_codex_warns_and_leaves_environment_key_unset(self):
         installer = load_module(INSTALL)
         with mock.patch.object(installer, "find_codex", return_value=None), \
@@ -361,6 +429,7 @@ class ScriptTests(unittest.TestCase):
             "python_version", "git_cli", "codex_cli", "repo_files", "mcp_stdio_handshake",
         })
         self.assertTrue(all(item["status"] == "PASS" for item in checks.values()), checks)
+        self.assertIn("hook", checks["repo_files"]["message"])
         for endpoint in ("codex_status", "resources/list", "resources/read", "codex_monitor"):
             self.assertIn(endpoint, checks["mcp_stdio_handshake"]["message"])
         self.assertFalse(self.gemini.exists())
@@ -369,7 +438,7 @@ class ScriptTests(unittest.TestCase):
 
     def test_installed_doctor_passes_after_install_and_fails_cleanly_before(self):
         checks = self.doctor("--codex-bin", self.codex, expected=1)
-        for name in ("installed_files", "mcp_config", "mcp_stdio_handshake"):
+        for name in ("installed_files", "mcp_config", "hooks_config", "mcp_stdio_handshake"):
             self.assertEqual(checks[name]["status"], "FAIL")
         self.assertEqual(checks["gemini_rules"]["status"], "WARN")
         self.assertEqual(checks["codex_cli"]["status"], "PASS")
@@ -379,12 +448,35 @@ class ScriptTests(unittest.TestCase):
         checks = self.doctor("--codex-bin", self.codex)
         self.assertEqual(set(checks), {
             "python_version", "git_cli", "codex_cli", "installed_files", "mcp_config",
-            "gemini_rules", "mcp_stdio_handshake", "cli_statusline",
+            "hooks_config", "gemini_rules", "mcp_stdio_handshake", "cli_statusline",
         })
         self.assertEqual(checks.pop("cli_statusline")["status"], "INFO")
         self.assertTrue(all(item["status"] == "PASS" for item in checks.values()), checks)
         self.assertFalse(self.state.exists())
         self.assertFalse(Path(self.env["CODEX_CASTOR_STATE_DIR"]).exists())
+
+    def test_doctor_requires_hook_file_and_matching_preinvocation_handler(self):
+        self.run_script(INSTALL)
+        target = self.install_dir / "hook.py"
+        doctor = load_module(DOCTOR)
+        command = f"python3 {shlex.quote(str(target))}"
+        for invalid in (
+            [], OTHER_HOOKS, {"codex-castor": {"PreInvocation": []}},
+            {"codex-castor": {"PreInvocation": [{"command": command, "type": "prompt"}]}},
+            {"codex-castor": {"PreInvocation": [{"type": "command", "command": command + ".bak"}]}},
+        ):
+            with self.subTest(invalid=invalid):
+                self.hooks.write_text(json.dumps(invalid), encoding="utf-8")
+                self.assertEqual(doctor.check_hooks(self.hooks, target)["status"], "FAIL")
+        handlers = [None, {"command": "'bad quoting"}, {"command": command}]
+        self.hooks.write_text(json.dumps({"codex-castor": {"PreInvocation": handlers}}), encoding="utf-8")
+        self.assertEqual(doctor.check_hooks(self.hooks, target)["status"], "PASS")
+
+        target.unlink()
+        checks = self.doctor(expected=1)
+        self.assertEqual(checks["hooks_config"]["status"], "PASS")
+        self.assertEqual(checks["installed_files"]["status"], "FAIL")
+        self.assertIn(str(target), checks["installed_files"]["message"])
 
     def test_doctor_resolves_codex_from_config_and_path_and_reports_bad_versions(self):
         configured = self.version_script(self.root / "configured" / "codex", "configured codex")

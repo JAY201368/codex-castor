@@ -17,7 +17,7 @@
 - **架构与实现分工。** Gemini 澄清需求、阅读仓库、撰写规格，并独立审查改动和运行检查。Codex 在本地按规格实现。
 - **零轮询。** Antigravity 以 `background: "always"` 运行派发和续接工具，在工具返回时唤醒 Gemini。等待期间，Gemini 可以结束当前轮次，空闲时消耗零 token。
 - **实时看进度，零模型 token。** CLI 状态栏（`scripts/statusline.py`）和终端看板（`scripts/watch.py`）显示任务进度。Codex Monitor 提供 **Tasks（任务）** 和 **Analytics（分析）** 视图，在任务卡片上以标签显示实际使用的模型和推理强度，并在可用时显示失败原因摘要。运行时每 1 秒刷新，空闲时每 8 秒刷新。
-- **在实践中沉淀模型配置经验，持续改善使用体验。** Castor 将历史派发数据与实际任务中的用户反馈一并保存，帮助你了解哪些 Codex 模型和推理等级适合当前工作，并根据用户需求改进协作流程。它记录每轮及累计用时、token 用量和返工次数。`codex_feedback` 保存首条回复原文、1 至 5 分评分、评审结论、标签和备注。Castor 同步 `telemetry.jsonl`、`telemetry.csv` 和 `report.md`。看板的 Analytics 视图与 `scripts/analytics.py` 均将失败任务排除在汇总统计之外。
+- **在实践中沉淀模型配置经验，持续改善使用体验。** Castor 将历史派发数据与实际任务中的用户反馈一并保存，帮助你了解哪些 Codex 模型和推理等级适合当前工作，并根据用户需求改进协作流程。它记录每轮及累计用时、token 用量和返工次数。Antigravity 钩子保存首条回复原文，Codex Monitor 通过 `codex_feedback` 保存 1 至 5 分评分、评审结论、标签和备注。Castor 同步 `telemetry.jsonl`、`telemetry.csv` 和 `report.md`。看板的 Analytics 视图与 `scripts/analytics.py` 均将失败任务排除在汇总统计之外。
 - **并行工作树。** 同一个仓库有多个并发执行者时，为每项任务分配独立的 Git 工作树和分支。
 - **结构化交接。** [交付报告的 JSON Schema](mcp/report.schema.json) 定义六个字段：`status`、`summary`、`files_changed`、`commands_run`、`tests_summary` 和 `open_issues`。
 - **带着上下文返工。** `codex_resume` 将审查意见交回原 Codex 会话，保留会话记忆和工作目录。
@@ -46,11 +46,12 @@ flowchart LR
 | [`mcp/report.schema.json`](mcp/report.schema.json) | 传给 Codex 的交付报告 JSON Schema。 |
 | [`mcp/telemetry.py`](mcp/telemetry.py) | 共用的运行指标与反馈模块，提供加锁更新、同步导出、历史回填和汇总统计。 |
 | [`mcp/monitor.html`](mcp/monitor.html) | 独立的 MCP App，资源地址为 `ui://codex-castor/monitor.html`，包含任务与分析视图、会话详情页及内嵌反馈表单。 |
-| [`skills/codex-orchestrator/SKILL.md`](skills/codex-orchestrator/SKILL.md) | Gemini 撰写规格、从当前可用模型中选择模型与推理强度、审查改动、汇报运行指标和记录用户首条回复的流程。 |
+| [`skills/codex-orchestrator/SKILL.md`](skills/codex-orchestrator/SKILL.md) | Gemini 撰写规格、从当前可用模型中选择模型与推理强度、审查改动和汇报运行指标的流程。 |
 | [`config/mcp_config.example.json`](config/mcp_config.example.json) | Antigravity 的 MCP 接入示例及七项工具的后台运行设置。 |
-| [`config/GEMINI.md`](config/GEMINI.md) | 全局角色分工与任务委派协议，包含摘要前缀 `[<model>·<effort>]` 和自动调用 `codex_feedback` 的规则。 |
-| [`scripts/install.py`](scripts/install.py) · [`scripts/install.sh`](scripts/install.sh) | 安装器及 POSIX shell 入口，将运行指标模块和分析命令行工具一并装到服务端所在目录。 |
-| [`scripts/doctor.py`](scripts/doctor.py) | 检查环境及安装文件，包括运行指标模块和分析工具，并实测 MCP stdio 握手。 |
+| [`config/GEMINI.md`](config/GEMINI.md) | 全局角色分工与异步委派协议，包含摘要前缀 `[<model>·<effort>]`。 |
+| [`scripts/install.py`](scripts/install.py) · [`scripts/install.sh`](scripts/install.sh) | 将运行指标模块、分析工具和钩子安装到服务端所在目录，并将钩子配置合并到 `hooks.json`。 |
+| [`scripts/doctor.py`](scripts/doctor.py) | 检查环境、安装文件及钩子配置，并实测 MCP stdio 握手。 |
+| [`scripts/hook.py`](scripts/hook.py) | Antigravity `PreInvocation` 钩子，从会话记录中自动保存首条回复，不消耗模型 token。 |
 | [`scripts/analytics.py`](scripts/analytics.py) | 用于筛选统计摘要、回填历史、记录反馈和导出 Markdown 与 CSV 的命令行工具。 |
 | [`scripts/statusline.py`](scripts/statusline.py) | Antigravity CLI 原生 `statusLine` 脚本，借助 `stack_with_default: true` 与内置状态栏一同显示。 |
 | [`scripts/watch.py`](scripts/watch.py) | 独立的终端实时看板，可用 `--follow` 跟踪事件流。 |
@@ -68,7 +69,7 @@ git clone https://github.com/JAY201368/codex-castor.git && cd codex-castor && ./
 
 如需启用 Antigravity CLI 状态栏，在仓库目录运行 `./scripts/install.sh --install-statusline` 或 `python3 scripts/install.py --install-statusline`。需要替换已有的自定义状态栏时，才加上 `--force-statusline`。
 
-重新加载 Antigravity，使 MCP 配置和技能生效。然后在仓库目录下检查安装：
+安装器将钩子注册到 `~/.gemini/config/hooks.json`，修改已有文件时会备份为 `hooks.json.bak`。重新加载 Antigravity，使 MCP 配置、钩子和技能生效，然后在仓库目录下检查安装。
 
 ```sh
 python3 scripts/doctor.py
@@ -76,7 +77,23 @@ python3 scripts/doctor.py
 
 开发时可用 `python3 scripts/install.py --symlink`，让安装文件链接到本地仓库。用 `--gemini-dir PATH` 指定 Gemini 目录，`--python PATH` 或 `--codex-bin PATH` 指定可执行文件，`--skip-gemini-md` 跳过全局说明文件，`--dry-run` 预览改动。自定义了 Gemini 目录时，给 Doctor 传入相同的 `--gemini-dir`。用 `--json` 获取机器可读的诊断结果。
 
-**手动接入。** 将[示例配置](config/mcp_config.example.json)中的 `codex-castor` 条目合并到 `~/.gemini/config/mcp_config.json`。将 `command` 指向 Python 3.9+，把服务端参数设为仓库内 `mcp/server.py` 或其安装副本的绝对路径。`telemetry.py`、`report.schema.json` 和 `monitor.html` 应与 `server.py` 同目录。使用安装副本时，把 `analytics.py` 也放在该目录。从仓库运行时，使用 `scripts/analytics.py`。设置 `CODEX_BIN` 指向 Codex 可执行文件。将[编排技能](skills/codex-orchestrator/SKILL.md)装入 `~/.gemini/config/skills/codex-orchestrator/SKILL.md`，把[全局协议](config/GEMINI.md)合并到 `~/.gemini/GEMINI.md`。
+**手动接入。** 将[示例配置](config/mcp_config.example.json)中的 `codex-castor` 条目合并到 `~/.gemini/config/mcp_config.json`。将 `command` 指向 Python 3.9+，把服务端参数设为仓库内 `mcp/server.py` 或其安装副本的绝对路径。`telemetry.py`、`report.schema.json` 和 `monitor.html` 应与 `server.py` 同目录。使用安装副本时，把 `analytics.py` 和可执行的 `hook.py` 也放在该目录。从仓库运行时，使用 `scripts/analytics.py` 和 `scripts/hook.py`。设置 `CODEX_BIN` 指向 Codex 可执行文件。将[编排技能](skills/codex-orchestrator/SKILL.md)装入 `~/.gemini/config/skills/codex-orchestrator/SKILL.md`，把[全局协议](config/GEMINI.md)合并到 `~/.gemini/GEMINI.md`。
+
+将以下条目合并到 `~/.gemini/config/hooks.json`，并替换 Python 和钩子的绝对路径。
+
+```json
+{
+  "codex-castor": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "[ ! -f '/path/to/hook.py' ] || '/path/to/python3' '/path/to/hook.py'",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
 
 **卸载由安装器管理的配置。** 执行以下命令。如需同时删除保存的 Castor 状态，再加上 `--purge-state`。
 
@@ -132,7 +149,7 @@ python3 scripts/analytics.py export [--md PATH] [--csv PATH]
 1. **撰写可独立执行的规格。** 先阅读仓库，再写明任务目标、上下文与关键文件、详细要求、约束与非目标、验证命令、验收标准。
 2. **选择模型、异步派发，再让出当前轮次。** 会话首次派发前，从 `~/.codex/models_cache.json` 读取当前可用的模型标识和受支持的推理等级。缓存不可用时，查阅 `~/.codex/config.toml`。为同类任务选择配置时，参考第 4 步积累的任务结果与用户反馈。派发时显式传入 `model` 和 `reasoning_effort`，每次派发或续接的 `toolSummary` 均以 `[<model>·<effort>]` 开头。同一仓库有两个或更多并发执行者时，设置 `use_worktree: true`。向用户说明任务 ID、模型、推理强度以及启用工作树时的分支，随后结束本轮或处理无关事项。等待后台结果即可，省去状态循环、休眠和定时查询。
 3. **独立验收。** 收到完成通知后阅读报告与 Git 摘要，查看实际差异并运行验证命令。需要修订时用 `codex_resume` 发送定位到文件的反馈。通过后先合并或拣选改动，再清理托管工作树。
-4. **汇报运行指标并记录首条回复。** 在验收摘要中列出模型与推理强度、总轮次与返工次数、累计耗时及 token 总量。汇报任一轮结果后，在处理用户的首条回复前，先按对应的 `task_id` 和 `round` 调用 `codex_feedback` 逐字保存，并记录用户表达的评分、评审结论、标签或备注。用户也可直接在 Codex Monitor 评分或填写备注。积累下来的记录为后续第 2 步的模型和推理强度选择提供依据，也帮助解决用户在协作中遇到的问题。
+4. **汇报运行指标。** 在验收摘要中列出模型与推理强度、总轮次与返工次数、累计耗时及 token 总量。每轮结束后，Antigravity `PreInvocation` 钩子会自动保存首条用户回复的原文。用户可以在 Codex Monitor 评分或填写备注。积累下来的记录为后续第 2 步的模型和推理强度选择提供依据，也帮助解决用户在协作中遇到的问题。
 
 完整流程见[编排技能](skills/codex-orchestrator/SKILL.md)。
 
@@ -143,6 +160,8 @@ python3 scripts/analytics.py export [--md PATH] [--csv PATH]
 ├── telemetry.jsonl
 ├── telemetry.csv
 ├── report.md
+├── hook_state/
+│   └── <conversation_id>.json  # 会话记录的读取位置及待记录的轮次
 ├── tasks/
 │   └── <task_id>/
 │       ├── spec.md

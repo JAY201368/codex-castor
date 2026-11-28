@@ -2071,8 +2071,7 @@ def handle_message(msg: Dict[str, Any]) -> None:
                     "Async MCP server for local Codex CLI (full permissions). "
                     "codex_dispatch and codex_resume run as Antigravity background tasks: "
                     "yield or handle other work until reactive wakeup. Call codex_status or "
-                    "codex_monitor on user request. Record the user's first reply after each "
-                    "presented round with codex_feedback, including its task_id and round."
+                    "codex_monitor on user request."
                 ),
             },
         )

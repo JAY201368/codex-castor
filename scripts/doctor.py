@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -100,10 +101,10 @@ def check_codex(args, entry):
     )
 
 
-def check_files(name, server, skill, analytics):
+def check_files(name, server, skill, analytics, hook_script):
     schema = server.with_name("report.schema.json")
     try:
-        for path in (server, schema, server.with_name("telemetry.py"), analytics, skill):
+        for path in (server, schema, server.with_name("telemetry.py"), analytics, hook_script, skill):
             if not path.is_file():
                 raise ValueError(f"Missing file: {path}")
         data = json.loads(schema.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
@@ -116,7 +117,29 @@ def check_files(name, server, skill, analytics):
             raise ValueError(f"{schema} must be a JSON object listing the required report fields")
     except (OSError, ValueError) as exc:
         return check(name, "FAIL", str(exc))
-    return check(name, "PASS", f"Server, report schema, telemetry, analytics, and skill found ({server.parent})")
+    return check(name, "PASS", f"Server, report schema, telemetry, analytics, hook, and skill found ({server.parent})")
+
+
+def check_hooks(hooks_path, hook_script):
+    name = "hooks_config"
+    try:
+        data = json.loads(hooks_path.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
+    except (OSError, ValueError) as exc:
+        return check(name, "FAIL", f"{hooks_path}: {exc}")
+    entry = data.get(SERVER_NAME) if isinstance(data, dict) else None
+    handlers = entry.get("PreInvocation") if isinstance(entry, dict) else None
+    if isinstance(handlers, list):
+        for handler in handlers:
+            if not isinstance(handler, dict) or handler.get("type") not in (None, "command"):
+                continue
+            command = handler.get("command")
+            if isinstance(command, str):
+                try:
+                    if str(hook_script) in shlex.split(command, comments=True):
+                        return check(name, "PASS", str(hooks_path))
+                except ValueError:
+                    continue
+    return check(name, "FAIL", f"{hooks_path}: {SERVER_NAME}.PreInvocation must reference {hook_script}")
 
 
 def check_rules(path):
@@ -305,23 +328,25 @@ def main():
         server = REPO_ROOT / "mcp" / "server.py"
         skill = REPO_ROOT / "skills" / "codex-orchestrator" / "SKILL.md"
         analytics = REPO_ROOT / "scripts" / "analytics.py"
+        hook_script = REPO_ROOT / "scripts" / "hook.py"
         entry = {}
     else:
         config_dir = gemini / "config"
         server = config_dir / SERVER_NAME / "server.py"
         skill = config_dir / "skills" / "codex-orchestrator" / "SKILL.md"
         analytics = server.with_name("analytics.py")
+        hook_script = server.with_name("hook.py")
         entry, config_check = read_config(config_dir / "mcp_config.json")
 
     checks = [
         check("python_version", "PASS" if sys.version_info >= (3, 9) else "FAIL", sys.version.split()[0]),
         probe_version("git_cli", "git"),
         check_codex(args, entry),
-        check_files("repo_files" if args.repo_only else "installed_files", server, skill, analytics),
+        check_files("repo_files" if args.repo_only else "installed_files", server, skill, analytics, hook_script),
     ]
     if not args.repo_only:
         checks.extend([
-            config_check, check_rules(gemini / "GEMINI.md"),
+            config_check, check_hooks(config_dir / "hooks.json", hook_script), check_rules(gemini / "GEMINI.md"),
             check_cli_statusline(gemini / "antigravity-cli" / "settings.json"),
         ])
     checks.append(check_handshake(server))

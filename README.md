@@ -17,7 +17,7 @@
 - **One architect, independent implementation.** Gemini clarifies requirements, reads the repository, writes the brief, and independently reviews code and runs checks. Codex implements the brief locally.
 - **Zero polling.** Antigravity runs dispatch and resume with `background: "always"` and wakes Gemini when the tool returns. Gemini can end its turn and spend zero tokens waiting while Codex works.
 - **Live observability at zero LLM tokens.** The CLI status bar (`scripts/statusline.py`) and terminal watcher (`scripts/watch.py`) show progress. Codex Monitor offers **Tasks** and **Analytics** views, shows effective model and reasoning effort in pills on task cards, and surfaces concise error summaries for failed tasks when available. The app refreshes every 1 second while active and every 8 seconds when idle.
-- **Empirical model tuning & continuous UX improvement.** Castor pairs dispatch history with feedback from real tasks so you can learn which Codex models and reasoning levels fit the work and improve the workflow around users’ needs. It tracks per-round and cumulative duration and tokens, plus rework counts. `codex_feedback` captures verbatim first replies, 1–5 ratings, verdicts, tags, and notes. Castor syncs `telemetry.jsonl`, `telemetry.csv`, and `report.md`. Monitor Analytics and `scripts/analytics.py` exclude failed tasks from aggregates.
+- **Empirical model tuning & continuous UX improvement.** Castor pairs dispatch history with feedback from real tasks so you can learn which Codex models and reasoning levels fit the work and improve the workflow around users’ needs. It tracks per-round and cumulative duration and tokens, plus rework counts. The Antigravity hook captures first replies verbatim, and Codex Monitor saves 1–5 ratings, verdicts, tags, and notes through `codex_feedback`. Castor syncs `telemetry.jsonl`, `telemetry.csv`, and `report.md`. Monitor Analytics and `scripts/analytics.py` exclude failed tasks from aggregates.
 - **Parallel Git worktrees.** Give each concurrent worker on the same repository a separate working tree and branch.
 - **Structured handoff.** [The report schema](mcp/report.schema.json) defines six fields: `status`, `summary`, `files_changed`, `commands_run`, `tests_summary`, and `open_issues`.
 - **Rework in context.** `codex_resume` sends review feedback to the same Codex session, preserving its memory and working directory.
@@ -46,11 +46,12 @@ The server uses newline-delimited JSON-RPC 2.0 over stdio and handles each tool 
 | [`mcp/report.schema.json`](mcp/report.schema.json) | JSON Schema passed to Codex for the final report. |
 | [`mcp/telemetry.py`](mcp/telemetry.py) | Shared telemetry and feedback module with locked updates, synced exports, historical backfill, and analytics aggregation. |
 | [`mcp/monitor.html`](mcp/monitor.html) | Self-contained MCP App at `ui://codex-castor/monitor.html` with Tasks and Analytics views, session detail sheets, and inline feedback. |
-| [`skills/codex-orchestrator/SKILL.md`](skills/codex-orchestrator/SKILL.md) | Gemini's procedure for writing specs, selecting live models and effort, reviewing work, reporting telemetry, and recording the user's first reply. |
+| [`skills/codex-orchestrator/SKILL.md`](skills/codex-orchestrator/SKILL.md) | Gemini's procedure for writing specs, selecting live models and effort, reviewing work, and reporting telemetry. |
 | [`config/mcp_config.example.json`](config/mcp_config.example.json) | Antigravity MCP wiring and background settings for all seven tools. |
-| [`config/GEMINI.md`](config/GEMINI.md) | Global role division and delegation protocol, including the `[<model>·<effort>]` summary prefix and automatic `codex_feedback` capture. |
-| [`scripts/install.py`](scripts/install.py) · [`scripts/install.sh`](scripts/install.sh) | Installer and POSIX shell entry point. Installs the telemetry module and analytics CLI beside the server. |
-| [`scripts/doctor.py`](scripts/doctor.py) | Checks environment and installed files, including telemetry and analytics, and runs a live MCP stdio handshake. |
+| [`config/GEMINI.md`](config/GEMINI.md) | Global role division and async delegation protocol, including the `[<model>·<effort>]` summary prefix. |
+| [`scripts/install.py`](scripts/install.py) · [`scripts/install.sh`](scripts/install.sh) | Installs telemetry, analytics, and the hook beside the server and merges the hook registration into `hooks.json`. |
+| [`scripts/doctor.py`](scripts/doctor.py) | Checks the environment, installed files, and hook registration, and runs an MCP stdio handshake. |
+| [`scripts/hook.py`](scripts/hook.py) | Antigravity `PreInvocation` hook that captures first replies from the conversation transcript without using model tokens. |
 | [`scripts/analytics.py`](scripts/analytics.py) | CLI for filtered summaries, historical backfill, feedback, and Markdown and CSV exports. |
 | [`scripts/statusline.py`](scripts/statusline.py) | Native Antigravity CLI `statusLine` renderer with `stack_with_default: true`. |
 | [`scripts/watch.py`](scripts/watch.py) | Standalone live terminal dashboard and `--follow` event stream. |
@@ -68,7 +69,7 @@ git clone https://github.com/JAY201368/codex-castor.git && cd codex-castor && ./
 
 To add the Antigravity CLI status bar, run `./scripts/install.sh --install-statusline` or `python3 scripts/install.py --install-statusline` from the clone. Add `--force-statusline` only when replacing an existing custom status line.
 
-Reload Antigravity so it picks up the MCP configuration and skill, then verify the installation from the clone:
+The installer registers the hook in `~/.gemini/config/hooks.json` and backs up the existing file to `hooks.json.bak` when it changes. Reload Antigravity to pick up the MCP configuration, hook, and skill, then verify the installation from the clone.
 
 ```sh
 python3 scripts/doctor.py
@@ -76,7 +77,23 @@ python3 scripts/doctor.py
 
 For local development, run `python3 scripts/install.py --symlink` to link installed files to the checkout. Use `--gemini-dir PATH` for a custom Gemini directory, `--python PATH` or `--codex-bin PATH` to select executables, `--skip-gemini-md` to skip the global instructions, and `--dry-run` to preview changes. Pass the same `--gemini-dir` to Doctor if you used a custom directory. Add `--json` for machine-readable diagnostics.
 
-**Manual setup.** Merge the `codex-castor` entry from [the example config](config/mcp_config.example.json) into `~/.gemini/config/mcp_config.json`. Point `command` to Python 3.9+ and set the server argument to the absolute path of either the repository's `mcp/server.py` or an installed copy. Keep `telemetry.py`, `report.schema.json`, and `monitor.html` beside `server.py`. For an installed copy, place `analytics.py` there too. From the repository, run it at `scripts/analytics.py`. Set `CODEX_BIN` to your executable. Install the [orchestrator skill](skills/codex-orchestrator/SKILL.md) at `~/.gemini/config/skills/codex-orchestrator/SKILL.md` and merge the [global protocol](config/GEMINI.md) into `~/.gemini/GEMINI.md`.
+**Manual setup.** Merge the `codex-castor` entry from [the example config](config/mcp_config.example.json) into `~/.gemini/config/mcp_config.json`. Point `command` to Python 3.9+ and set the server argument to the absolute path of either the repository's `mcp/server.py` or an installed copy. Keep `telemetry.py`, `report.schema.json`, and `monitor.html` beside `server.py`. For an installed copy, place `analytics.py` and executable `hook.py` there too. From the checkout, use `scripts/analytics.py` and `scripts/hook.py`. Set `CODEX_BIN` to your executable. Install the [orchestrator skill](skills/codex-orchestrator/SKILL.md) at `~/.gemini/config/skills/codex-orchestrator/SKILL.md` and merge the [global protocol](config/GEMINI.md) into `~/.gemini/GEMINI.md`.
+
+Merge this entry into `~/.gemini/config/hooks.json` and substitute the absolute Python and hook paths.
+
+```json
+{
+  "codex-castor": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "[ ! -f '/path/to/hook.py' ] || '/path/to/python3' '/path/to/hook.py'",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
 
 **Uninstall an installer-managed setup.** Run the following command. Add `--purge-state` only when you also intend to remove saved Castor state.
 
@@ -132,7 +149,7 @@ All seven tools use `eager: true` in the Antigravity configuration. Background m
 1. **Write a self-contained spec.** Inspect the repository first. Cover objective, context and key files, detailed requirements, constraints and non-goals, verification commands, and acceptance criteria.
 2. **Choose a model, dispatch, and yield.** Before the first dispatch of the session, read `~/.codex/models_cache.json` for available model slugs and supported reasoning levels. Fall back to `~/.codex/config.toml` if the cache is unavailable. Use the outcomes and user feedback collected in Step 4 to choose settings for similar tasks. Pass `model` and `reasoning_effort` explicitly on dispatch and prefix each dispatch or resume `toolSummary` with `[<model>·<effort>]`. Set `use_worktree: true` for two or more concurrent workers in one repository. Tell the user the task ID, model and effort, and branch when enabled, then end the turn or handle unrelated work. Wait for the background result without a status loop, sleep, or scheduled timer.
 3. **Review independently.** On wakeup, read the returned report and Git summary, inspect the actual diff, and run the verification commands. Send file-specific feedback through `codex_resume` if rework is required. Otherwise merge or cherry-pick accepted changes before cleaning up the worktree.
-4. **Report telemetry and record the first reply.** Include model·effort, rounds and reworks, total duration, and total tokens in the acceptance summary. After presenting any round result, use `codex_feedback` with its `task_id` and `round` to record the first user reply verbatim before acting on it, including any rating, verdict, tags, or notes the user expresses. Users can also rate or leave notes directly in Codex Monitor. The accumulated record guides future routing in Step 2 and helps improve the workflow where users encounter friction.
+4. **Report telemetry.** Include model·effort, rounds and reworks, total duration, and total tokens in the acceptance summary. The Antigravity `PreInvocation` hook automatically records the first user reply verbatim after a round finishes. Users can rate or leave notes in Codex Monitor. The accumulated record guides future routing in Step 2 and helps improve the workflow where users encounter friction.
 
 See the [Orchestrator Skill](skills/codex-orchestrator/SKILL.md) for the complete procedure.
 
@@ -143,6 +160,8 @@ See the [Orchestrator Skill](skills/codex-orchestrator/SKILL.md) for the complet
 ├── telemetry.jsonl
 ├── telemetry.csv
 ├── report.md
+├── hook_state/
+│   └── <conversation_id>.json  # transcript cursor and pending rounds
 ├── tasks/
 │   └── <task_id>/
 │       ├── spec.md

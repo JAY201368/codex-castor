@@ -15,6 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVER_NAME = "codex-castor"
 START_MARKER = "<!-- codex-castor:start -->"
 END_MARKER = "<!-- codex-castor:end -->"
+LEGACY_REPLY_RULE = (
+    "- After you present the result of a `codex_dispatch` or `codex_resume` round, record the user's first reply "
+    "verbatim with `codex_feedback` using the completed `task_id` and `round`. Include any rating, verdict, tags, "
+    "or notes the user expresses. Record the reply even when the user asks a follow-up question or starts a new task."
+)
 TOOL_BACKGROUNDS = {
     "codex_dispatch": "always",
     "codex_resume": "always",
@@ -63,6 +68,15 @@ def server_entry(python, server, codex):
     }
 
 
+def hooks_entry(python, hook_path):
+    hook = shlex.quote(str(hook_path))
+    return {
+        "PreInvocation": [
+            {"type": "command", "command": f"[ ! -f {hook} ] || {shlex.quote(str(python))} {hook}", "timeout": 5},
+        ],
+    }
+
+
 def reject_json_constant(value):
     raise ValueError(f"invalid JSON value {value}")
 
@@ -104,6 +118,19 @@ def config_update(data, entry):
             return None
         servers[SERVER_NAME] = entry
     return json_bytes(data)
+
+
+def hooks_update(path, entry):
+    raw, data = read_json_object(path)
+    if entry is None:
+        if SERVER_NAME not in data:
+            return raw, None
+        del data[SERVER_NAME]
+    else:
+        if json.dumps(data.get(SERVER_NAME), sort_keys=True) == json.dumps(entry, sort_keys=True):
+            return raw, None
+        data[SERVER_NAME] = entry
+    return raw, json_bytes(data)
 
 
 def statusline_update(path, target, *, uninstall, force):
@@ -181,7 +208,7 @@ def rules_update(path, uninstall):
     if span is not None:
         start, end = span
         return original, original[:start] + block + original[end:]
-    if original is None or original.strip() == source.strip():
+    if original is None or original.strip() in (source.strip(), f"{source.strip()}\n{LEGACY_REPLY_RULE}"):
         return original, block + "\n"
     return original, original + "\n\n" + block + "\n"
 
@@ -251,7 +278,9 @@ def run(args):
     gemini = args.gemini_dir.expanduser().absolute()
     config_dir = gemini / "config"
     config_path = config_dir / "mcp_config.json"
+    hooks_path = config_dir / "hooks.json"
     install_dir = config_dir / SERVER_NAME
+    hook_target = install_dir / "hook.py"
     skill_dir = config_dir / "skills" / "codex-orchestrator"
     rules_path = gemini / "GEMINI.md"
     state_dir = gemini / SERVER_NAME
@@ -264,6 +293,7 @@ def run(args):
         (None, None) if args.skip_gemini_md else rules_update(rules_path, args.uninstall)
     )
     entry = None
+    hook = None
     artifacts = []
     raw_settings, updated_settings = None, None
     if args.uninstall:
@@ -280,10 +310,12 @@ def run(args):
         if not codex:
             print("Warning: Codex executable not found. The server will search at runtime.", file=sys.stderr)
         entry = server_entry(python, install_dir / "server.py", os.path.abspath(codex) if codex else None)
+        hook = hooks_entry(python, hook_target)
         for name, target, mode in (
             ("mcp/server.py", install_dir / "server.py", 0o755),
             ("mcp/telemetry.py", install_dir / "telemetry.py", 0o644),
             ("scripts/analytics.py", install_dir / "analytics.py", 0o755),
+            ("scripts/hook.py", hook_target, 0o755),
             ("mcp/report.schema.json", install_dir / "report.schema.json", 0o644),
             ("skills/codex-orchestrator/SKILL.md", skill_dir / "SKILL.md", 0o644),
         ):
@@ -305,6 +337,7 @@ def run(args):
                 print(f"Warning: Status line source is unavailable at {statusline}.", file=sys.stderr)
 
     updated_config = config_update(config, entry)
+    raw_hooks, updated_hooks = hooks_update(hooks_path, hook)
     if args.dry_run:
         print("Dry run. No files will be changed.")
     if not args.uninstall:
@@ -312,6 +345,7 @@ def run(args):
             install_artifact(*artifact, args.dry_run)
 
     write_config_update(config_path, raw_config, updated_config, args.dry_run)
+    write_config_update(hooks_path, raw_hooks, updated_hooks, args.dry_run)
     write_config_update(cli_settings, raw_settings, updated_settings, args.dry_run)
     if updated_rules != original_rules:
         if updated_rules is None:
@@ -334,7 +368,8 @@ def run(args):
             print(f"Codex Castor uninstalled from {gemini}")
     elif not args.dry_run:
         print(f"Codex Castor configured in {config_path}")
-        print(f"Server and schema in {install_dir}")
+        print(f"PreInvocation hook configured in {hooks_path}")
+        print(f"Server, schema, and hook in {install_dir}")
         print(f"Skill in {skill_dir}")
         print(f"Run python3 scripts/doctor.py --gemini-dir {shlex.quote(str(gemini))}")
 
@@ -342,9 +377,9 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gemini-dir", type=Path, default=Path.home() / ".gemini")
-    parser.add_argument("--python", metavar="PATH", help="Python executable for the MCP server")
+    parser.add_argument("--python", metavar="PATH", help="Python executable for the MCP server and hook")
     parser.add_argument("--codex-bin", metavar="PATH", help="Codex CLI executable for the MCP server")
-    parser.add_argument("--symlink", action="store_true", help="Link the server, schema, monitor, and skill to the repo")
+    parser.add_argument("--symlink", action="store_true", help="Link the integration files to the repo")
     parser.add_argument("--skip-gemini-md", action="store_true", help="Leave GEMINI.md untouched")
     parser.add_argument("--dry-run", action="store_true", help="Print planned changes without applying them")
     parser.add_argument("--uninstall", action="store_true", help="Remove the installed integration")
