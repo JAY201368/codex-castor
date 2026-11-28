@@ -116,7 +116,7 @@ class HookSubprocessTests(unittest.TestCase):
         self.transcript.touch()
         self.env = {**os.environ, "CODEX_CASTOR_STATE_DIR": str(self.state_root)}
 
-    def invoke(self, live=None, *, conversation="conv", transcript=None, raw=None, script=HOOK, **fields):
+    def invoke(self, live=None, *, conversation="conv", transcript=None, raw=None, script=HOOK, markdown=None, **fields):
         payload = {
             "conversationId": conversation, "transcriptPath": str(transcript or self.transcript),
             "hookEventName": "PreInvocation", "lastUserInput": live, **fields,
@@ -126,7 +126,12 @@ class HookSubprocessTests(unittest.TestCase):
             env=self.env, cwd=self.root, text=True, capture_output=True, timeout=5,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout, "{}\n")
+        if markdown is None:
+            self.assertEqual(completed.stdout, "{}\n")
+        else:
+            self.assertEqual(json.loads(completed.stdout), {"injectSteps": [{"systemMessage": {
+                "systemMessage": "", "metadata": {"user_markdown": markdown},
+            }}]})
         return completed
 
     def append(self, *entries, transcript=None):
@@ -151,6 +156,93 @@ class HookSubprocessTests(unittest.TestCase):
             for entry in read(path).get("feedback", {}).get("user_first_prompts", [])
         }
 
+    def test_wakeup_announces_a_round_once_even_with_preexisting_reply_and_legacy_state(self):
+        task = self.task(
+            "finished", model="requested", effective_model="actual",
+            reasoning_effort="low", effective_reasoning_effort="high", usage={"total_tokens": 12345},
+            feedback={"user_first_prompts": [{"round": 1, "prompt": "already captured"}]},
+        )
+        self.append(user("initial"), launch("conv/background"))
+        self.invoke("initial")
+        legacy_state = read(self.state_path())
+        del legacy_state["announced"]
+        legacy_state["recorded"] = {"finished": [1]}
+        self.state_path().write_text(json.dumps(legacy_state), encoding="utf-8")
+
+        completion = wakeup("conv/background", result("finished", artifacts={}))
+        self.append(completion, completion)
+        self.invoke(
+            "initial",
+            markdown="> **[Codex Castor Hook · auto]** `finished` (completed) | `actual` (`high`) | Round 1 | 1.00s | 12,345 tokens",
+        )
+        self.assertEqual(read(self.state_path())["announced"], {"finished": [1]})
+        self.invoke("initial")
+        self.append(completion)
+        self.invoke("initial")
+        self.append(user("new reply"))
+        self.invoke("new reply")
+        self.assertEqual(self.prompts(task), {1: "already captured"})
+
+    def test_multiple_rounds_for_same_task_use_round_metrics_and_cumulative_fallback(self):
+        self.task(
+            "reworked", round=4, status="running", model="requested", reasoning_effort="medium",
+            duration_seconds=99, usage={"total_tokens": 99999}, total_duration_seconds=12.01,
+            total_usage={"total_tokens": 10000},
+            rounds=[{"round": 2, "status": "completed", "model": "round-model", "reasoning_effort": "high",
+                     "duration_seconds": 3.5, "usage": {"input_tokens": 2000, "output_tokens": 345}},
+                    {"round": 3, "status": "failed", "duration_seconds": None, "usage": None}],
+        )
+        self.append(*(wakeup("unknown", result("reworked", number, artifacts={})) for number in (2, 3, 2)))
+        self.invoke(markdown=(
+            "> **[Codex Castor Hook · auto]** `reworked` (completed) | `round-model` (`high`) | "
+            "Round 2 (1 rework) | 3.50s (total 12.01s) | 2,345 tokens (total 10,000)\n\n"
+            "> **[Codex Castor Hook · auto]** `reworked` (failed) | `requested` (`medium`) | "
+            "Round 3 (2 reworks) | total 12.01s | total 10,000 tokens"
+        ))
+        self.assertEqual(read(self.state_path())["announced"], {"reworked": [2, 3]})
+
+    def test_current_rework_falls_back_to_top_level_metrics_and_preserves_zero(self):
+        self.task(
+            "reworked", round=2, duration_seconds=0, total_duration_seconds=1.25,
+            usage={"total_tokens": 0}, total_usage={"total_tokens": 1234}, rounds=[{"round": 2}],
+        )
+        self.append(wakeup("unknown", result("reworked", 2, artifacts={})))
+        self.invoke(markdown=(
+            "> **[Codex Castor Hook · auto]** `reworked` (completed) | `unknown` (`unknown`) | "
+            "Round 2 (1 rework) | 0.00s (total 1.25s) | 0 tokens (total 1,234)"
+        ))
+
+    def test_historical_completions_are_skipped_before_latest_user_input(self):
+        for name in ("old", "also-old", "fresh"):
+            self.task(name)
+        self.append(
+            wakeup("unknown", result("old", artifacts={})),
+            user("reply to old"),
+            wakeup("unknown", result("also-old", artifacts={})),
+            user(""),
+            wakeup("unknown", result("fresh", artifacts={})),
+            user("system continuation", source="SYSTEM"),
+        )
+        self.invoke(markdown=(
+            "> **[Codex Castor Hook · auto]** `fresh` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —"
+        ))
+        self.assertEqual(read(self.state_path())["announced"], {"fresh": [1]})
+
+    def test_unavailable_metadata_does_not_hide_other_wakeups(self):
+        invalid = self.task("invalid")
+        invalid.write_text("{bad JSON", encoding="utf-8")
+        unreadable = self.task("unreadable")
+        unreadable.unlink()
+        unreadable.mkdir()
+        self.task("running", round="2", status="running")
+        self.task("starting", status="starting")
+        self.task("sparse", status=None, duration_seconds=None)
+        self.append(*(wakeup("unknown", result(name, number, artifacts={})) for name, number in (
+            ("invalid", 1), ("unreadable", 1), ("running", 2), ("starting", 1), ("missing", 1), ("sparse", 1),
+        )))
+        self.invoke(markdown="> **[Codex Castor Hook · auto]** `sparse` (unknown) | `unknown` (`unknown`) | Round 1 | duration — | tokens —")
+        self.assertEqual(read(self.state_path())["announced"], {"sparse": [1]})
+
     def test_parallel_background_rounds_capture_identical_wrapped_reply_verbatim(self):
         first = self.task("first", feedback={"rating": 4, "notes": "Monitor note"})
         second = self.task("second")
@@ -165,8 +257,12 @@ class HookSubprocessTests(unittest.TestCase):
             wakeup("conv/task-657", result("second"), sender_only=True),
             user("system continuation", source="SYSTEM"),
         )
-        self.invoke(prompt)
+        self.invoke(prompt, markdown=(
+            "> **[Codex Castor Hook · auto]** `first` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —\n\n"
+            "> **[Codex Castor Hook · auto]** `second` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —"
+        ))
         state = read(self.state_path())
+        self.assertEqual(state["announced"], {"first": [1], "second": [1]})
         self.assertEqual(state["bg_tasks"], [])
         self.assertEqual(state["pending"], {
             "first": {"round": 1, "seen_line": 4, "baseline_user_input": prompt},
@@ -195,7 +291,9 @@ class HookSubprocessTests(unittest.TestCase):
     def test_last_user_input_fallback_only_when_baseline_is_known_and_changes(self):
         task = self.task("fallback")
         self.append(wakeup("unknown", result("fallback", workdir="/tmp")))
-        self.invoke("original")
+        self.invoke("original", markdown=(
+            "> **[Codex Castor Hook · auto]** `fallback` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —"
+        ))
         self.invoke("original")
         self.assertEqual(self.prompts(task), {})
         self.append(wakeup("unknown", result("fallback", workdir="/tmp")))
@@ -208,7 +306,9 @@ class HookSubprocessTests(unittest.TestCase):
 
         unknown = self.task("unknown-baseline")
         self.append(wakeup("unknown", result("unknown-baseline", duration_seconds=1)))
-        self.invoke()
+        self.invoke(markdown=(
+            "> **[Codex Castor Hook · auto]** `unknown-baseline` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —"
+        ))
         self.invoke("ahead of transcript")
         self.assertEqual(self.prompts(unknown), {})
         self.append(user("ahead of transcript", source=None))
@@ -294,7 +394,10 @@ class HookSubprocessTests(unittest.TestCase):
                     launch("conv/background"), wakeup("unknown", result(discarded.parent.name, artifacts={})),
                     call("mcp_codex-castor_codex_resume"), transcript=transcript,
                 )
-                self.invoke("original reply", conversation=method, transcript=transcript)
+                self.invoke("original reply", conversation=method, transcript=transcript, markdown=(
+                    f"> **[Codex Castor Hook · auto]** `{discarded.parent.name}` (completed) | `unknown` (`unknown`) | "
+                    "Round 1 | 1.00s | tokens —"
+                ))
                 before = read(self.state_path(method))
                 self.assertIn(discarded.parent.name, before["pending"])
                 self.assertEqual(before["bg_tasks"], ["conv/background"])
@@ -310,7 +413,7 @@ class HookSubprocessTests(unittest.TestCase):
                     transcript.write_bytes(new_lines)
                 elif method == "replace":
                     replacement = transcript.with_suffix(".new")
-                    replacement.write_bytes(new_lines + json_line(user("p" * 3000)))
+                    replacement.write_bytes(json_line(user("p" * 3000)) + new_lines)
                     replacement.replace(transcript)
                 else:
                     transcript = transcript.with_suffix(".new")
@@ -318,23 +421,30 @@ class HookSubprocessTests(unittest.TestCase):
                 self.invoke("new reply", conversation=method, transcript=transcript)
                 after = read(self.state_path(method))
                 self.assertEqual(after["recorded"], {done.parent.name: [1], new.parent.name: [1]})
+                self.assertEqual(after["announced"], {discarded.parent.name: [1]})
                 self.assertEqual(after["pending"], {})
                 self.assertEqual(after["bg_tasks"], [])
                 self.assertFalse(after["expect_sync_result"])
                 self.assertEqual(after["transcript_offset"], len(transcript.read_bytes()))
                 self.assertEqual(self.prompts(discarded), {})
                 self.assertEqual(self.prompts(new), {1: "new reply"})
+                self.append(wakeup("unknown", result(discarded.parent.name, artifacts={})), transcript=transcript)
+                self.invoke("new reply", conversation=method, transcript=transcript)
 
     def test_conversations_have_isolated_state_even_with_colliding_safe_ids(self):
         pending = self.task("only-a")
         other = self.task("only-b")
         transcript_b = self.root / "other.jsonl"
         self.append(user("baseline"), wakeup("unknown", result("only-a", artifacts={})))
-        self.invoke("baseline", conversation="conv/a")
+        self.invoke("baseline", conversation="conv/a", markdown=(
+            "> **[Codex Castor Hook · auto]** `only-a` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —"
+        ))
         self.append(
             user("unrelated message"), wakeup("unknown", result("only-b", artifacts={})), transcript=transcript_b,
         )
-        self.invoke("unrelated message", conversation="conv?a", transcript=transcript_b)
+        self.invoke("unrelated message", conversation="conv?a", transcript=transcript_b, markdown=(
+            "> **[Codex Castor Hook · auto]** `only-b` (completed) | `unknown` (`unknown`) | Round 1 | 1.00s | tokens —"
+        ))
         self.assertEqual(self.prompts(pending), {})
         self.invoke("reply to A", conversation="conv/a")
         self.assertEqual(self.prompts(pending), {1: "reply to A"})

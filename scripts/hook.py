@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture first replies to Codex rounds from Antigravity's PreInvocation hook."""
+"""Display Codex wakeup telemetry and capture first replies in Antigravity."""
 
 import fcntl
 import hashlib
@@ -139,8 +139,63 @@ def record_reply(state_root, state, task, prompt):
         recorded.append(number)
 
 
+def format_wakeup_summary(task, number, meta):
+    from telemetry import normalize_usage
+
+    round_entry = next(
+        (item for item in meta.get("rounds") or [] if isinstance(item, dict) and item.get("round") == number),
+        {},
+    )
+    status = round_entry.get("status") or meta.get("status") or "unknown"
+    model = round_entry.get("model") or meta.get("effective_model") or meta.get("model") or "unknown"
+    effort = (
+        round_entry.get("reasoning_effort") or meta.get("effective_reasoning_effort")
+        or meta.get("reasoning_effort") or "unknown"
+    )
+    duration = round_entry.get("duration_seconds")
+    usage = normalize_usage(round_entry.get("usage"))
+    if number == int(meta.get("round", 1)):
+        if duration is None:
+            duration = meta.get("duration_seconds")
+        if usage is None:
+            usage = normalize_usage(meta.get("usage"))
+    total_duration = meta.get("total_duration_seconds")
+    total_usage = normalize_usage(meta.get("total_usage"))
+
+    round_label = f"Round {number}"
+    if number > 1:
+        round_label += f" ({number - 1} {'rework' if number == 2 else 'reworks'})"
+
+    if type(duration) in (int, float):
+        duration_label = f"{duration:.2f}s"
+        if number > 1 and type(total_duration) in (int, float):
+            duration_label += f" (total {total_duration:.2f}s)"
+    elif type(total_duration) in (int, float):
+        duration_label = f"total {total_duration:.2f}s"
+    else:
+        duration_label = "duration —"
+
+    if usage is not None:
+        tokens_label = f"{usage['total_tokens']:,} tokens"
+        if number > 1 and total_usage is not None:
+            tokens_label += f" (total {total_usage['total_tokens']:,})"
+    elif total_usage is not None:
+        tokens_label = f"total {total_usage['total_tokens']:,} tokens"
+    else:
+        tokens_label = "tokens —"
+
+    return (
+        f"> **[Codex Castor Hook · auto]** `{task}` ({status}) | `{model}` (`{effort}`) | "
+        f"{round_label} | {duration_label} | {tokens_label}"
+    )
+
+
 def scan(stream, state_root, state, live_input):
+    from telemetry import read_meta
+
     baseline = live_input
+    newly_completed = {}
+    last_user_line = state["line_number"]
     stream.seek(state["transcript_offset"])
     for line in stream:
         if not line.endswith(b"\n"):
@@ -160,6 +215,7 @@ def scan(stream, state_root, state, live_input):
             state["expect_sync_result"] = isinstance(calls, list) and any(is_codex_call(call) for call in calls)
         elif kind == "USER_INPUT" and step.get("source") != "SYSTEM":
             state["expect_sync_result"] = False
+            last_user_line = state["line_number"]
             prompt = user_prompt(content)
             if prompt:
                 baseline = prompt
@@ -171,6 +227,8 @@ def scan(stream, state_root, state, live_input):
             if not completed:
                 continue
             task, number = completed
+            if kind == "SYSTEM_MESSAGE":
+                newly_completed.setdefault(completed, state["line_number"])
             previous = state["pending"].get(task)
             if previous and previous["round"] >= number:
                 continue
@@ -183,6 +241,21 @@ def scan(stream, state_root, state, live_input):
             if prior_input is not None and live_input != prior_input:
                 record_reply(state_root, state, task, live_input)
 
+    summaries = []
+    for (task, number), seen_line in newly_completed.items():
+        if seen_line < last_user_line or number in state["announced"].get(task, []):
+            continue
+        try:
+            meta = read_meta(state_root / "tasks" / task / "meta.json")
+            if not meta or (meta.get("status") in ("starting", "running") and number == int(meta.get("round", 1))):
+                continue
+            summary = format_wakeup_summary(task, number, meta)
+        except (OSError, TypeError, ValueError):
+            continue
+        summaries.append(summary)
+        state["announced"].setdefault(task, []).append(number)
+    return summaries
+
 
 def update_state(state_path, conversation_id, transcript_path, state_root, live_input):
     from telemetry import atomic_output, read_meta, utc_now
@@ -193,6 +266,7 @@ def update_state(state_path, conversation_id, transcript_path, state_root, live_
         digest = hashlib.sha256(conversation_id.encode("utf-8", "surrogatepass")).hexdigest()
         state_path = state_path.with_name(f"{state_path.stem[:55]}~{digest}.json")
         state = read_meta(state_path) or {}
+    state.setdefault("announced", {})
 
     transcript = Path(transcript_path)
     info = transcript.stat()
@@ -216,13 +290,14 @@ def update_state(state_path, conversation_id, transcript_path, state_root, live_
             state = {
                 "conversation_id": conversation_id, "transcript_path": transcript_path, "transcript_ino": info.st_ino,
                 "transcript_offset": 0, "line_number": 0, "bg_tasks": [], "pending": {},
-                "recorded": state.get("recorded", {}), "expect_sync_result": False,
+                "recorded": state.get("recorded", {}), "announced": state["announced"], "expect_sync_result": False,
             }
-        scan(stream, state_root, state, live_input)
+        summaries = scan(stream, state_root, state, live_input)
 
     state["updated_at"] = utc_now()
     with atomic_output(state_path) as output:
         json.dump(state, output)
+    return summaries
 
 
 def main():
@@ -247,12 +322,16 @@ def main():
     # Keep overlapping invocations from advancing the same cursor independently.
     with state_path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        update_state(state_path, conversation_id, transcript_path, state_root, live_input)
+        summaries = update_state(state_path, conversation_id, transcript_path, state_root, live_input)
+    if summaries:
+        return {"injectSteps": [{"systemMessage": {
+            "systemMessage": "", "metadata": {"user_markdown": "\n\n".join(summaries)},
+        }}]}
 
 
 if __name__ == "__main__":
     try:
-        main()
+        print(json.dumps(main() or {}))
     except Exception as exc:
         print(f"codex-castor hook: {type(exc).__name__}", file=sys.stderr)
-    print("{}")
+        print("{}")

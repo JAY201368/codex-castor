@@ -51,7 +51,7 @@ flowchart LR
 | [`config/GEMINI.md`](config/GEMINI.md) | 全局角色分工与异步委派协议，包含摘要前缀 `[<model>·<effort>]`。 |
 | [`scripts/install.py`](scripts/install.py) · [`scripts/install.sh`](scripts/install.sh) | 将运行指标模块、分析工具和钩子安装到服务端所在目录，并将钩子配置合并到 `hooks.json`。 |
 | [`scripts/doctor.py`](scripts/doctor.py) | 检查环境、安装文件及钩子配置，并实测 MCP stdio 握手。 |
-| [`scripts/hook.py`](scripts/hook.py) | Antigravity `PreInvocation` 钩子，从会话记录中自动保存首条回复，不消耗模型 token。 |
+| [`scripts/hook.py`](scripts/hook.py) | Antigravity `PreInvocation` 钩子自动保存首条回复，并在唤醒时通过 `metadata.user_markdown` 在会话中显示模型、推理强度、耗时和 token 总量，模型 token 开销为零。 |
 | [`scripts/analytics.py`](scripts/analytics.py) | 用于筛选统计摘要、回填历史、记录反馈和导出 Markdown 与 CSV 的命令行工具。 |
 | [`scripts/statusline.py`](scripts/statusline.py) | Antigravity CLI 原生 `statusLine` 脚本，借助 `stack_with_default: true` 与内置状态栏一同显示。 |
 | [`scripts/watch.py`](scripts/watch.py) | 独立的终端实时看板，可用 `--follow` 跟踪事件流。 |
@@ -149,7 +149,7 @@ python3 scripts/analytics.py export [--md PATH] [--csv PATH]
 1. **撰写可独立执行的规格。** 先阅读仓库，再写明任务目标、上下文与关键文件、详细要求、约束与非目标、验证命令、验收标准。
 2. **选择模型、异步派发，再让出当前轮次。** 会话首次派发前，从 `~/.codex/models_cache.json` 读取当前可用的模型标识和受支持的推理等级。缓存不可用时，查阅 `~/.codex/config.toml`。为同类任务选择配置时，参考第 4 步积累的任务结果与用户反馈。派发时显式传入 `model` 和 `reasoning_effort`，每次派发或续接的 `toolSummary` 均以 `[<model>·<effort>]` 开头。同一仓库有两个或更多并发执行者时，设置 `use_worktree: true`。向用户说明任务 ID、模型、推理强度以及启用工作树时的分支，随后结束本轮或处理无关事项。等待后台结果即可，省去状态循环、休眠和定时查询。
 3. **独立验收。** 收到完成通知后阅读报告与 Git 摘要，查看实际差异并运行验证命令。需要修订时用 `codex_resume` 发送定位到文件的反馈。通过后先合并或拣选改动，再清理托管工作树。
-4. **汇报运行指标。** 在验收摘要中列出模型与推理强度、总轮次与返工次数、累计耗时及 token 总量。每轮结束后，Antigravity `PreInvocation` 钩子会自动保存首条用户回复的原文。用户可以在 Codex Monitor 评分或填写备注。积累下来的记录为后续第 2 步的模型和推理强度选择提供依据，也帮助解决用户在协作中遇到的问题。
+4. **查看运行指标与反馈。** Antigravity `PreInvocation` 钩子会在唤醒时把已完成轮次的运行指标直接显示在会话中，并自动保存该轮首条用户回复的原文。用户可以在 Codex Monitor 评分或填写备注。积累下来的记录为后续第 2 步的模型和推理强度选择提供依据，也帮助解决用户在协作中遇到的问题。
 
 完整流程见[编排技能](skills/codex-orchestrator/SKILL.md)。
 

@@ -66,5 +66,5 @@ When Antigravity wakes you with the completed result from `codex_dispatch` or `c
 ## 5. Automatic Telemetry & User Feedback Loop
 
 - Every `codex_dispatch` and `codex_resume` records the task summary, effective model and reasoning effort, per-round and total duration and tokens, and rework count. The server keeps `~/.gemini/codex-castor/telemetry.jsonl`, `telemetry.csv`, and `report.md` in sync.
-- In the acceptance summary, include a compact telemetry line with model·effort, rounds/reworks, total duration, and total tokens. Use the cumulative metrics from the tool result and show unavailable values accordingly.
-- The installed Antigravity `PreInvocation` hook automatically captures the first user reply after a round finishes, and users can rate or leave notes in Codex Monitor.
+- On wakeup, the installed Antigravity `PreInvocation` hook automatically displays the effective model, reasoning effort, round and rework count, duration, and tokens inline, with cumulative totals for rework rounds. Gemini can focus its acceptance summary on the outcome and verification.
+- The hook automatically captures the first user reply verbatim after a round finishes. Users can rate the task or leave notes in Codex Monitor.
