@@ -12,7 +12,7 @@ MODULE_DIR = HERE if (HERE / "castor_platform.py").is_file() else HERE.parent / 
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
-from castor_platform import configure_stdio, pid_alive, read_available_stdin
+from castor_platform import configure_stdio, pid_alive, read_available_stdin, read_json_file
 
 
 LIVE_STATUSES = {"starting", "running"}
@@ -33,8 +33,7 @@ def object_value(value):
 
 def read_meta(path):
     try:
-        with open(path, encoding="utf-8") as stream:
-            return object_value(json.load(stream))
+        return object_value(read_json_file(path))
     except (OSError, ValueError):
         return {}
 

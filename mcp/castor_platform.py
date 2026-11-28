@@ -2,6 +2,7 @@
 
 import base64
 import errno
+import json
 import os
 import re
 import shlex
@@ -162,17 +163,28 @@ def file_lock(path):
             msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def replace_file(source, target):
-    # Windows can briefly deny replacement while a monitor or virus scanner reads the target.
+def retry_file_access(operation, *args, **kwargs):
+    if not WINDOWS:
+        return operation(*args, **kwargs)
+    # Windows readers and atomic replacements can briefly deny one another access.
     deadline = time.monotonic() + 0.75
     while True:
         try:
-            os.replace(source, target)
-            return
+            return operation(*args, **kwargs)
         except OSError as exc:
-            if not WINDOWS or getattr(exc, "winerror", None) not in (5, 32, 33) or time.monotonic() >= deadline:
+            winerror = getattr(exc, "winerror", None)
+            sharing_conflict = winerror in (5, 32, 33) or (winerror is None and exc.errno == errno.EACCES)
+            if not sharing_conflict or time.monotonic() >= deadline:
                 raise
             time.sleep(0.025)
+
+
+def replace_file(source, target):
+    retry_file_access(os.replace, source, target)
+
+
+def read_json_file(path):
+    return json.loads(retry_file_access(Path(path).read_text, encoding="utf-8"))
 
 
 def pid_alive(pid, job_name=None):

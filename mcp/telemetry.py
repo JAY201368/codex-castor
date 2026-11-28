@@ -13,7 +13,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-from castor_platform import file_lock, replace_file
+from castor_platform import file_lock, read_json_file, replace_file, retry_file_access
 
 TOKEN_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
@@ -66,7 +66,7 @@ def atomic_output(path: Path):
 
 def read_meta(path: Path) -> dict | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = read_json_file(path)
     except (FileNotFoundError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -278,7 +278,7 @@ def prompt_preview(path: Path, *, max_len: int = 220) -> str:
 
 def jsonl(path: Path):
     try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
+        with retry_file_access(path.open, encoding="utf-8", errors="replace") as stream:
             for line in stream:
                 try:
                     value = json.loads(line)

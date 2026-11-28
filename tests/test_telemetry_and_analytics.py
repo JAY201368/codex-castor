@@ -1,6 +1,7 @@
 """Telemetry tests using archived artifacts and the MCP stdio fixture."""
 
 import csv
+import errno
 import io
 import json
 import os
@@ -129,6 +130,14 @@ for _ in range(5):
             for worker in workers:
                 worker.result()
         self.assertEqual(counter.read_text(encoding="ascii"), "15")
+
+    def test_windows_metadata_read_retries_transient_access_denial(self):
+        path = self.state / "tasks" / "example" / "meta.json"
+        with mock.patch("castor_platform.WINDOWS", True), mock.patch.object(
+            Path, "read_text", side_effect=[PermissionError(errno.EACCES, "Sharing conflict"), '{"round": 2}'],
+        ) as read:
+            self.assertEqual(telemetry.read_meta(path), {"round": 2})
+        self.assertEqual(read.call_count, 2)
 
     def test_session_title_uses_heading_or_objective(self):
         self.assertEqual(telemetry.extract_title(

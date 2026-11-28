@@ -4,8 +4,8 @@ import importlib.util
 import json
 import os
 import queue
-import subprocess
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -18,6 +18,10 @@ from platform_fixture import WINDOWS, environment, script_executable
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / "mcp" / "server.py"
+sys.path.insert(0, str(SERVER.parent))
+
+from castor_platform import read_json_file
+
 TOOL_NAMES = {
     "codex_dispatch", "codex_resume", "codex_status", "codex_cancel", "codex_cleanup_worktree",
     "codex_monitor", "codex_feedback",
@@ -155,7 +159,7 @@ else:
 
 
 def read_json(path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json_file(path)
 
 
 def load_server():

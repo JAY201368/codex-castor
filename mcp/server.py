@@ -35,7 +35,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import telemetry
-from castor_platform import WINDOWS, build_env, configure_stdio, executable_path, find_codex, pid_alive
+from castor_platform import WINDOWS, build_env, configure_stdio, executable_path, find_codex, pid_alive, read_json_file
 
 if WINDOWS:
     from windows_process import CANCEL_EXIT_CODE
@@ -124,8 +124,7 @@ def sanitize_task_id(raw: Optional[str]) -> str:
 
 def read_json_safe(path: Path) -> Optional[Dict[str, Any]]:
     try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = read_json_file(path)
         return data if isinstance(data, dict) else None
     except Exception:
         return None
