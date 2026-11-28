@@ -136,10 +136,12 @@ def run_git(args: List[str], cwd: Path, timeout: int = 30) -> Tuple[int, str, st
         git = executable_path("git.exe") if WINDOWS else "git"
         if not git:
             return 1, "", "git.exe not found on PATH"
+        # Git commands must never inherit the open MCP request stream.
         proc = subprocess.run(
             [git, *args],
             cwd=str(cwd),
             env=build_env(),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8" if WINDOWS else None,

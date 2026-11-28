@@ -253,9 +253,13 @@ class ScriptTests(unittest.TestCase):
     def test_previous_unmarked_rules_are_upgraded_without_stale_reply_instructions(self):
         installer = load_module(INSTALL)
         self.gemini.mkdir()
-        self.rules.write_text(RULES_SOURCE.read_text() + installer.LEGACY_REPLY_RULE + "\n", encoding="utf-8")
-        self.run_script(INSTALL)
-        self.assertEqual(self.rules.read_text(), f"{START}\n{RULES_SOURCE.read_text()}{END}\n")
+        source = RULES_SOURCE.read_text(encoding="utf-8")
+        legacy = f"{source}{installer.LEGACY_REPLY_RULE}\n"
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                self.rules.write_bytes(legacy.replace("\n", newline).encode("utf-8"))
+                self.run_script(INSTALL)
+                self.assertEqual(self.rules.read_text(encoding="utf-8"), f"{START}\n{source}{END}\n")
 
     def test_wrapper_and_symlink_mode_can_switch_back_to_copies(self):
         if WINDOWS:

@@ -192,13 +192,15 @@ def rules_update(path, uninstall):
         remaining = remove_rule_block(original[:start], original[end:])
         return original, remaining if remaining.strip() else None
 
-    source = (REPO_ROOT / "config" / "GEMINI.md").read_bytes().decode("utf-8")
+    source = (REPO_ROOT / "config" / "GEMINI.md").read_text(encoding="utf-8")
     body = source if source.endswith("\n") else source + "\n"
     block = f"{START_MARKER}\n{body}{END_MARKER}"
     if span is not None:
         start, end = span
         return original, original[:start] + block + original[end:]
-    if original is None or original.strip() in (source.strip(), f"{source.strip()}\n{LEGACY_REPLY_RULE}"):
+    if original is None or original.replace("\r\n", "\n").strip() in (
+        source.strip(), f"{source.strip()}\n{LEGACY_REPLY_RULE}",
+    ):
         return original, block + "\n"
     return original, original + "\n\n" + block + "\n"
 
