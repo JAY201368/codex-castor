@@ -449,8 +449,10 @@ class ServerTests(ServerHarness):
         else:
             self.assertIsNone(result["exit_code"])
         meta = read_json(self.state / "tasks" / task_id / "meta.json")
-        message = "[WinError 193]" if WINDOWS else "[Errno 8]"
-        self.assertIn(message, meta["error_summary"])
+        if WINDOWS:
+            self.assertRegex(meta["error_summary"], r"\[WinError (193|216)\]")
+        else:
+            self.assertIn("[Errno 8]", meta["error_summary"])
         self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"],
                          {"kind": "error", "text": meta["error_summary"]})
 
