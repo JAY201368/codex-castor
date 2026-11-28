@@ -659,6 +659,33 @@ class ServerTests(ServerHarness):
         snapshot, _ = self.monitor(limit=10)
         self.assertEqual([task["task_id"] for task in snapshot["tasks"]], ["newer", "older"])
 
+    def test_monitor_order_uses_round_start_and_recorded_finish_times(self):
+        def write_task(task_id, **meta):
+            task = self.state / "tasks" / task_id
+            task.mkdir(parents=True, exist_ok=True)
+            (task / "meta.json").write_text(json.dumps({"task_id": task_id, **meta}))
+
+        write_task("older-finish", status="completed", finished_at="2026-01-01T12:00:00Z",
+                   updated_at="2026-01-09T12:00:00Z")
+        write_task("newer-finish", status="completed", finished_at="2026-01-02T12:00:00Z")
+        feedback = self.receive(self.send_tool("codex_feedback", task_id="newer-finish", rating=5))["result"]
+        self.assertFalse(feedback["isError"])
+        write_task("newer-finish", status="completed", updated_at="2026-01-02T12:00:00Z")
+
+        for alpha_update, beta_update in [(6, 5), (6, 7), (8, 7)]:
+            with self.subTest(alpha_update=alpha_update, beta_update=beta_update):
+                write_task("alpha-live", status="running", pid=os.getpid(), round=2,
+                           round_started_at="2026-01-04T12:00:00Z", created_at="2026-01-01T10:00:00Z",
+                           updated_at=f"2026-01-{alpha_update:02}T12:00:00Z")
+                write_task("beta-live", status="running", pid=os.getpid(),
+                           created_at="2026-01-03T12:00:00Z", updated_at=f"2026-01-{beta_update:02}T12:00:00Z")
+                snapshot, _ = self.monitor()
+                self.assertEqual([task["task_id"] for task in snapshot["tasks"]],
+                                 ["alpha-live", "beta-live", "newer-finish", "older-finish"])
+                self.assertEqual(snapshot["tasks"][2]["last_round_finished_at"], "2026-01-02T12:00:00Z")
+                limited, _ = self.monitor(limit=2)
+                self.assertEqual([task["task_id"] for task in limited["tasks"]], ["alpha-live", "beta-live"])
+
     def test_monitor_detail_limits_stream_and_prompt_bytes(self):
         task = self.state / "tasks" / "large"
         task.mkdir(parents=True)
@@ -1112,6 +1139,33 @@ class QuotaTests(unittest.TestCase):
             normalized = self.server.normalize_quota_payload(WEEKLY_QUOTA)
             cache_path.write_text(json.dumps(normalized), encoding="utf-8")
             self.assertEqual(self.server.load_cached_quota(), normalized)
+
+
+class TaskSummaryTests(unittest.TestCase):
+    def test_last_round_finished_at_uses_completed_rounds(self):
+        server = load_server()
+        first = "2026-01-01T12:00:00Z"
+        second = "2026-01-02T12:00:00Z"
+        last = "2026-01-03T12:00:00Z"
+        history = [{"round": 2, "finished_at": second}, {"round": 3, "finished_at": None},
+                   {"round": 1, "finished_at": first}, {"round": 4, "finished_at": ""}]
+        cases = [
+            ("settled", {"round": 3, "finished_at": last, "rounds": history}, {}, last),
+            ("initial run", {"round": 1, "finished_at": None}, {}, None),
+            ("rework with metadata history", {"round": 3, "rounds": history},
+             {"rounds": [{"round": 3, "finished_at": last}]}, second),
+            ("rework with record history", {"round": 2, "finished_at": "", "rounds": []},
+             {"rounds": [{"round": 1, "finished_at": first}]}, first),
+            ("unnumbered history", {"round": 3},
+             {"rounds": [{"finished_at": first}, {"finished_at": second}, {"finished_at": None}]}, second),
+        ]
+        for label, meta, record, expected in cases:
+            with self.subTest(label=label):
+                alive = label != "settled"
+                meta = {**meta, "status": "running" if alive else "completed",
+                        "updated_at": "2026-01-09T12:00:00Z"}
+                summary = server.build_task_summary(meta, alive, SERVER.parent, record)
+                self.assertEqual(summary["last_round_finished_at"], expected)
 
 
 class FailureSummaryTests(unittest.TestCase):

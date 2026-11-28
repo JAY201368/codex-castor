@@ -1399,6 +1399,28 @@ def latest_activity(meta, task_dir, alive, status):
     return {"kind": fallback_kind, "text": str(status or "Idle")}
 
 
+def last_round_finished_at(meta: Dict[str, Any], record: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    finished_at = meta.get("finished_at")
+    if isinstance(finished_at, str) and finished_at:
+        return finished_at
+
+    rounds = meta.get("rounds") or (record or {}).get("rounds") or []
+    latest = None
+    latest_number = None
+    for position, entry in enumerate(rounds, start=1):
+        if not isinstance(entry, dict):
+            continue
+        finished_at = entry.get("finished_at")
+        if not isinstance(finished_at, str) or not finished_at:
+            continue
+        number = entry.get("round")
+        if type(number) is not int:
+            number = position
+        if latest_number is None or number >= latest_number:
+            latest_number, latest = number, finished_at
+    return latest
+
+
 def build_task_summary(
     meta: Dict[str, Any], alive: bool, task_dir: Path, record: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -1434,6 +1456,7 @@ def build_task_summary(
     )
     return {
         **{field: meta.get(field) for field in fields},
+        "last_round_finished_at": last_round_finished_at(meta, record),
         "task_id": meta.get("task_id", task_dir.name),
         "task_title": (nonempty_string(meta.get("title")) or telemetry.prompt_title(prompt)
                        or telemetry.extract_title(fallback, task_id=task_id)),
@@ -1789,13 +1812,17 @@ def handle_codex_monitor(args: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
     limit = task_limit(args)
     selected_id = sanitize_task_id(str(args["task_id"])) if args.get("task_id") else None
     tasks = list_task_metadata()
-    tasks.sort(key=lambda item: (
-        item[1].get("task_id", item[0].name) == selected_id,
-        item[2],
-        str(item[1].get("finished_at") or item[1].get("updated_at") or item[1].get("created_at") or ""),
-    ), reverse=True)
     records = telemetry.load_or_build_records(STATE_ROOT)
     by_task_id = {record["task_id"]: record for record in records}
+
+    def sort_key(item):
+        task_dir, meta, alive = item
+        task_id = meta.get("task_id", task_dir.name)
+        started_at = str(meta.get("round_started_at") or meta.get("created_at") or "")
+        sort_at = started_at if alive else str(last_round_finished_at(meta, by_task_id.get(task_id)) or "")
+        return task_id == selected_id, alive, sort_at, started_at, task_id
+
+    tasks.sort(key=sort_key, reverse=True)
     summaries = []
     selected = None
     detail = None

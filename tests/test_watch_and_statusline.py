@@ -581,14 +581,119 @@ verifyQuota().catch(error => { process.stderr.write(String(error.stack)); proces
                       'fullViewButton("prompt")', 'fullViewButton("stream")', 'back.id = "back-sub"',
                       "count > 0 || live(selectedTask()) ? 1000 : 8000", "setInterval(tick, 1000)",
                       "{limit: 0, task_id: selected, include_detail: true}", "{limit: 200}",
-                      "task.finished_at || task.updated_at || task.created_at",
+                      "task.last_round_finished_at || task.finished_at",
                       'new Option("Undecided", "")',
                       "cardModel(task)"):
             with self.subTest(token=token):
                 self.assertIn(token, script)
         self.assertNotIn('new Option("Verdict", "")', script)
+        self.assertNotIn("updated_at", re.search(r"^const lastFinished = .*", script, re.MULTILINE)[0])
         self.assertNotIn("Show full prompt", self.html)
         self.assertNotIn("Override · config ", self.html)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for monitor rendering verification")
+    def test_monitor_keeps_project_and_active_order_stable_until_round_finishes(self):
+        script, = self.document.scripts
+        render_code = "\n".join(script[script.index(start):script.index(end)] for start, end in (
+            ("function live(", "function sameRound("),
+            ("function projectName(", "function cardSeconds("),
+            ("const compactNumber", "// Markdown stays text throughout."),
+        ))
+        harness = """
+const assert = require("node:assert/strict");
+function node(tag, className = "", textContent = "") {
+  return {tag, className, textContent, children: [], dataset: {}, classList: {add() {}},
+    get firstChild() { return this.children[0]; },
+    get lastChild() { return this.children.at(-1); },
+    append(...children) { for (const child of children) this.insertBefore(child, null); },
+    insertBefore(child, next) {
+      if (child.parent) child.remove();
+      this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, child);
+      child.parent = this;
+    },
+    remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; },
+    replaceChildren(...children) { this.children = []; this.append(...children); },
+    querySelector(selector) { return this.children.find(child => "." + child.className === selector); },
+    setAttribute(name, value) { this[name] = value; }};
+}
+const elements = Object.fromEntries(["live-section", "project-section", "projects", "task-empty"]
+  .map(id => [id, node("div")]));
+const byId = id => elements[id];
+const activeGrid = node("div");
+byId("live-section").append(node("div"), activeGrid);
+byId("project-section").append(byId("projects"));
+const button = (label, action, cls) => node("button", cls, label);
+const icon = () => node("i");
+const groupTitle = (name, count) => node("h2", "", name + " " + count);
+function renderCards(grid, members) {
+  grid.replaceChildren(...members.map(task => {
+    const card = node("article");
+    card.dataset.task = task.task_id;
+    return card;
+  }));
+}
+const expandedProjects = new Set();
+const receivedResult = true;
+let tasks, filter;
+"""
+        assertions = """
+const timestamp = day => `2026-01-${String(day).padStart(2, "0")}T12:00:00Z`;
+const projects = byId("projects");
+function verifyProjects(expected) {
+  renderTasks();
+  assert.deepEqual(projects.children.map(section => section.dataset.project), expected, filter);
+}
+function verifyProjectDate(index, finishedAt) {
+  const info = projects.children[index].firstChild.lastChild.textContent;
+  const expected = finishedAt ? "— tok · " + projectDate.format(Date.parse(finishedAt)) : "— tok";
+  assert.equal(info, expected, filter);
+}
+
+for (filter of ["all", "unrated", "rated"]) {
+  const feedback = filter === "rated" ? {rating: 5} : null;
+  const alpha = {task_id: "alpha", project: "Alpha", status: "completed", finished_at: timestamp(2), feedback};
+  const alphaAnchor = {...alpha, task_id: "alpha-anchor", finished_at: timestamp(1)};
+  const beta = {...alphaAnchor, task_id: "beta", project: "Beta"};
+  const alphaLive = {task_id: "alpha-live", project: "Alpha", status: "running", round: 1,
+    created_at: timestamp(3), round_started_at: timestamp(4), feedback};
+  const betaLive = {...alphaLive, task_id: "beta-live", project: "Beta",
+    created_at: timestamp(3), round_started_at: null};
+  tasks = [beta, betaLive, alphaAnchor, alpha, alphaLive];
+  for (const [alphaUpdate, betaUpdate] of [[5, 4], [5, 6], [7, 6]]) {
+    alphaLive.updated_at = timestamp(alphaUpdate);
+    betaLive.updated_at = timestamp(betaUpdate);
+    tasks.reverse();
+    verifyProjects(["Alpha", "Beta"]);
+    verifyProjectDate(0, timestamp(2));
+    verifyProjectDate(1, timestamp(1));
+    if (filter === "all") {
+      assert.deepEqual(activeGrid.children.map(card => card.dataset.task), ["alpha-live", "beta-live"]);
+    }
+  }
+
+  Object.assign(betaLive, {status: "completed", finished_at: timestamp(8)});
+  verifyProjects(["Beta", "Alpha"]);
+  verifyProjectDate(0, timestamp(8));
+
+  Object.assign(alpha, {status: "running", round: 2, round_started_at: timestamp(9),
+    finished_at: null, last_round_finished_at: timestamp(2), updated_at: timestamp(9)});
+  verifyProjects(["Beta", "Alpha"]);
+  verifyProjectDate(1, filter === "all" ? timestamp(1) : timestamp(2));
+
+  Object.assign(alpha, {status: "completed", finished_at: timestamp(10), last_round_finished_at: timestamp(10)});
+  verifyProjects(["Alpha", "Beta"]);
+  verifyProjectDate(0, timestamp(10));
+}
+
+filter = "unrated";
+tasks = [{task_id: "initial", project: "Initial", status: "running", round: 1,
+  created_at: timestamp(3), updated_at: timestamp(9)}];
+verifyProjects(["Initial"]);
+verifyProjectDate(0, null);
+"""
+        result = subprocess.run(["node"], input=harness + render_code + assertions,
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for JavaScript syntax verification")
     def test_inline_javascript_syntax(self):

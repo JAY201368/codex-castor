@@ -979,7 +979,12 @@ function renderCards(grid, members) {
 }
 const compactNumber = new Intl.NumberFormat(undefined, {notation: "compact", maximumFractionDigits: 1});
 const projectDate = new Intl.DateTimeFormat(undefined, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
-const lastFinished = task => Date.parse(task.finished_at || task.updated_at || task.created_at) || 0;
+const lastFinished = task => Date.parse(task.last_round_finished_at || task.finished_at) || 0;
+const taskStarted = task => Date.parse(task.round_started_at || task.created_at) || 0;
+const compareActiveTasks = (a, b) =>
+  (taskStarted(b) - taskStarted(a)) || String(b.task_id || "").localeCompare(String(a.task_id || ""));
+const compareProjectTasks = (a, b) =>
+  (lastFinished(b) - lastFinished(a)) || compareActiveTasks(a, b);
 function projectGroup(name) {
   const section = node("section", "project-group");
   section.dataset.project = name;
@@ -998,7 +1003,7 @@ function projectGroup(name) {
 }
 function renderTasks() {
   const showActive = filter === "all" || filter === "active-only";
-  const active = showActive ? tasks.filter(live) : [];
+  const active = showActive ? tasks.filter(live).sort(compareActiveTasks) : [];
   const activeSection = byId("live-section");
   activeSection.hidden = !active.length;
   activeSection.firstChild.replaceChildren(groupTitle("Active", active.length));
@@ -1011,7 +1016,7 @@ function renderTasks() {
       if (filter === "rated") return isRated(task);
       if (filter === "unrated") return !isRated(task);
       return !live(task);
-    }).sort((a, b) => lastFinished(b) - lastFinished(a));
+    }).sort(compareProjectTasks);
     for (const task of projectTasks) {
       const name = projectName(task);
       if (!groups.has(name)) groups.set(name, []);
@@ -1030,7 +1035,7 @@ function renderTasks() {
       const known = members.map(taskTokens).filter(n => n != null);
       const tokens = known.length ? compactNumber.format(known.reduce((a,b) => a + b, 0)) + " tok" : "— tok";
       const latest = lastFinished(members[0]);
-      toggle.lastChild.textContent = latest ? tokens + " · " + projectDate.format(latest) : tokens;
+      toggle.lastChild.textContent = latest > 0 ? tokens + " · " + projectDate.format(latest) : tokens;
       const grid = section.lastChild;
       grid.hidden = !open;
       if (open) renderCards(grid, members);
