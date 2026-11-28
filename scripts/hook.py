@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Display Codex wakeup telemetry and capture first replies in Antigravity."""
 
-import fcntl
 import hashlib
 import json
 import os
@@ -268,7 +267,7 @@ def update_state(state_path, conversation_id, transcript_path, state_root, live_
         state = read_meta(state_path) or {}
     state.setdefault("announced", {})
 
-    transcript = Path(transcript_path)
+    transcript = Path(transcript_path).expanduser()
     info = transcript.stat()
     if not stat.S_ISREG(info.st_mode):
         return
@@ -301,8 +300,10 @@ def update_state(state_path, conversation_id, transcript_path, state_root, live_
 
 
 def main():
+    from castor_platform import configure_stdio, file_lock
     from telemetry import default_state_root
 
+    configure_stdio()
     payload = json.load(sys.stdin)
     if not isinstance(payload, dict) or payload.get("hookEventName") not in (None, "PreInvocation"):
         return
@@ -320,8 +321,7 @@ def main():
     directory.mkdir(parents=True, exist_ok=True)
     state_path = directory / (safe_conversation_id(conversation_id) + ".json")
     # Keep overlapping invocations from advancing the same cursor independently.
-    with state_path.with_suffix(".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with file_lock(state_path.with_suffix(".lock")):
         summaries = update_state(state_path, conversation_id, transcript_path, state_root, live_input)
     if summaries:
         return {"injectSteps": [{"systemMessage": {

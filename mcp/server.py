@@ -12,9 +12,8 @@ import json
 import math
 import os
 import re
-import select
+import queue
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -36,6 +35,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import telemetry
+from castor_platform import WINDOWS, build_env, configure_stdio, executable_path, find_codex, pid_alive
+
+if WINDOWS:
+    from windows_process import CANCEL_EXIT_CODE
+else:
+    CANCEL_EXIT_CODE = None
 
 SCHEMA_PATH = BASE_DIR / "report.schema.json"
 MONITOR_URI = "ui://codex-castor/monitor.html"
@@ -95,39 +100,13 @@ def utc_now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def build_env() -> Dict[str, str]:
-    env = os.environ.copy()
-    extra_paths = [
-        "/opt/homebrew/bin",
-        "/opt/homebrew/sbin",
-        "/usr/local/bin",
-        str(Path.home() / ".local" / "bin"),
-        str(Path.home() / ".cargo" / "bin"),
-    ]
-    current = env.get("PATH", "")
-    parts = [p for p in current.split(":") if p]
-    for p in extra_paths:
-        if os.path.isdir(p) and p not in parts:
-            parts.insert(0, p)
-    env["PATH"] = ":".join(parts)
-    return env
-
-
 def resolve_codex_bin() -> str:
-    candidates = [
-        os.environ.get("CODEX_BIN", ""),
-        shutil.which("codex", path=build_env().get("PATH")) or "",
-        "/opt/homebrew/bin/codex",
-        "/usr/local/bin/codex",
-        str(Path.home() / ".local" / "bin" / "codex"),
-        str(Path.home() / ".npm-global" / "bin" / "codex"),
-    ]
-    for c in candidates:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    raise RuntimeError(
-        "codex executable not found. Set CODEX_BIN env var or ensure codex is in PATH."
-    )
+    env_path = build_env().get("PATH")
+    executable = executable_path(os.environ.get("CODEX_BIN")) or find_codex(env_path)
+    if executable:
+        return executable
+    command = "codex.exe" if WINDOWS else "codex"
+    raise RuntimeError(f"codex executable not found. Set CODEX_BIN or add {command} to PATH.")
 
 
 def sanitize_task_id(raw: Optional[str]) -> str:
@@ -135,7 +114,10 @@ def sanitize_task_id(raw: Optional[str]) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw.strip()).strip("-.")
         if not cleaned:
             raise ValueError("task_id contains no valid characters")
-        return cleaned[:80]
+        cleaned = cleaned[:80].rstrip(".") if WINDOWS else cleaned[:80]
+        if WINDOWS and re.fullmatch(r"(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])", cleaned.split(".", 1)[0]):
+            raise ValueError("task_id is a reserved Windows device name")
+        return cleaned
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{stamp}-{uuid.uuid4().hex[:6]}"
 
@@ -151,12 +133,17 @@ def read_json_safe(path: Path) -> Optional[Dict[str, Any]]:
 
 def run_git(args: List[str], cwd: Path, timeout: int = 30) -> Tuple[int, str, str]:
     try:
+        git = executable_path("git.exe") if WINDOWS else "git"
+        if not git:
+            return 1, "", "git.exe not found on PATH"
         proc = subprocess.run(
-            ["git", *args],
+            [git, *args],
             cwd=str(cwd),
             env=build_env(),
             capture_output=True,
             text=True,
+            encoding="utf-8" if WINDOWS else None,
+            errors="replace" if WINDOWS else None,
             timeout=timeout,
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
@@ -422,21 +409,14 @@ def refresh_rollout_metadata(meta: Dict[str, Any]) -> bool:
     return changed
 
 
-def is_pid_alive(pid: Optional[int]) -> bool:
-    if not pid or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except Exception:
-        return False
+def terminate_process_group(proc: Optional[subprocess.Popen], pid: Optional[int] = None, job_name=None) -> bool:
+    if WINDOWS:
+        from windows_process import terminate_recorded_job
 
+        if proc is not None:
+            return proc.castor_job.terminate()
+        return terminate_recorded_job(pid, job_name)
 
-def terminate_process_group(proc: Optional[subprocess.Popen], pid: Optional[int] = None) -> bool:
     target_pid = proc.pid if proc is not None else pid
     if not target_pid or target_pid <= 0:
         return False
@@ -462,7 +442,7 @@ def terminate_process_group(proc: Optional[subprocess.Popen], pid: Optional[int]
     while time.monotonic() < deadline:
         if proc is not None and proc.poll() is not None:
             return True
-        if proc is None and not is_pid_alive(target_pid):
+        if proc is None and not pid_alive(target_pid):
             return True
         time.sleep(0.1)
 
@@ -476,19 +456,63 @@ def terminate_process_group(proc: Optional[subprocess.Popen], pid: Optional[int]
     return sent
 
 
+def launch_codex(args, *, cwd=None, input_path=None, stderr=subprocess.DEVNULL):
+    command = [resolve_codex_bin(), *args]
+    options = dict(cwd=cwd, stdout=subprocess.PIPE, stderr=stderr, env=build_env(), bufsize=0)
+    if WINDOWS:
+        from windows_process import launch_in_job
+
+        return launch_in_job(command, input_path=input_path, **options)
+    if input_path is None:
+        return subprocess.Popen(command, stdin=subprocess.PIPE, start_new_session=True, **options)
+    with input_path.open("rb") as prompt:
+        return subprocess.Popen(command, stdin=prompt, start_new_session=True, **options)
+
+
+class PipeReader:
+    """Read chunks without blocking the caller's timeout or relying on selectable pipes."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.chunks = queue.Queue(maxsize=16)
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self.pump, daemon=True)
+        self.thread.start()
+
+    def pump(self):
+        while not self.stopped.is_set():
+            try:
+                chunk = self.stream.read(65536)
+            except (OSError, ValueError) as exc:
+                chunk = exc
+            while not self.stopped.is_set():
+                try:
+                    self.chunks.put(chunk, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+            if not chunk or isinstance(chunk, Exception):
+                return
+
+    def read(self, timeout):
+        try:
+            chunk = self.chunks.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if isinstance(chunk, Exception):
+            raise OSError(f"Could not read Codex stdout: {chunk}") from chunk
+        return chunk
+
+    def close(self):
+        self.stopped.set()
+        self.thread.join(timeout=0.25)
+
+
 def query_codex_quota(timeout: float = 8.0) -> Optional[Dict[str, Any]]:
     deadline = time.monotonic() + timeout
-    proc = subprocess.Popen(
-        [resolve_codex_bin(), "app-server", "--listen", "stdio://"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=build_env(),
-        start_new_session=True,
-        bufsize=0,
-    )
-    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
-    streams = [proc.stdout, proc.stderr]
+    proc = launch_codex(["app-server", "--listen", "stdio://"])
+    assert proc.stdin is not None and proc.stdout is not None
+    reader = PipeReader(proc.stdout)
     pending = b""
 
     def send(message: Dict[str, Any]) -> None:
@@ -514,17 +538,12 @@ def query_codex_quota(timeout: float = 8.0) -> Optional[Dict[str, Any]]:
                     return reply.get("result")
                 continue
 
-            ready, _, _ = select.select(streams, [], [], remaining)
-            if not ready:
+            chunk = reader.read(remaining)
+            if chunk is None:
                 raise TimeoutError("Codex app-server quota query timed out")
-            for stream in ready:
-                chunk = stream.read(65536)
-                if stream is proc.stdout:
-                    if not chunk:
-                        raise RuntimeError("Codex app-server closed stdout before replying")
-                    pending += chunk
-                elif not chunk:
-                    streams.remove(stream)
+            if not chunk:
+                raise RuntimeError("Codex app-server closed stdout before replying")
+            pending += chunk
 
     try:
         send({"id": 1, "method": "initialize", "params": {"clientInfo": {
@@ -536,11 +555,13 @@ def query_codex_quota(timeout: float = 8.0) -> Optional[Dict[str, Any]]:
         return normalize_quota_payload(read_reply(2))
     finally:
         proc.stdin.close()
-        proc.stdout.close()
-        proc.stderr.close()
         if proc.poll() is None:
             terminate_process_group(proc)
-        proc.wait(timeout=2)
+        try:
+            proc.wait(timeout=2)
+        finally:
+            reader.close()
+            proc.stdout.close()
 
 
 def load_cached_quota() -> Optional[Dict[str, Any]]:
@@ -802,32 +823,37 @@ def notify_activity(meta: Dict[str, Any], progress_token: Any, progress: int) ->
 
 @contextmanager
 def claim_task(task_id: str) -> Iterator[None]:
+    key = os.path.normcase(task_id)
     with ACTIVE_LOCK:
-        if task_id in CLAIMED_TASKS:
+        if key in CLAIMED_TASKS:
             raise ValueError(f"Task '{task_id}' is currently running. Wait for it or cancel it first.")
-        CLAIMED_TASKS.add(task_id)
+        CLAIMED_TASKS.add(key)
     try:
         yield
     finally:
         with ACTIVE_LOCK:
-            CLAIMED_TASKS.remove(task_id)
+            CLAIMED_TASKS.remove(key)
 
 
 def iter_codex_stdout(stream: BinaryIO) -> Iterator[Optional[bytes]]:
     pending = b""
-    while True:
-        # Check the rollout while Codex is working without publishing stdout events.
-        if not select.select([stream], [], [], 2.0)[0]:
-            yield None
-            continue
-        chunk = stream.read(65536)
-        if not chunk:
-            if pending:
-                yield pending
-            return
-        *lines, pending = (pending + chunk).split(b"\n")
-        for line in lines:
-            yield line + b"\n"
+    reader = PipeReader(stream)
+    try:
+        while True:
+            chunk = reader.read(2.0)
+            if chunk is None:
+                # Check the rollout while Codex is working without publishing stdout events.
+                yield None
+                continue
+            if not chunk:
+                if pending:
+                    yield pending
+                return
+            *lines, pending = (pending + chunk).split(b"\n")
+            for line in lines:
+                yield line + b"\n"
+    finally:
+        reader.close()
 
 
 def execute_codex_round(
@@ -874,9 +900,11 @@ def execute_codex_round(
             "_turn_usage_reported": False,
         }
     )
+    meta.pop("windows_job", None)
     telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
 
     cancel_flag = threading.Event()
+    task_key = os.path.normcase(task_id)
     proc: Optional[subprocess.Popen] = None
     last_agent_message = ""
     fatal_errors: List[str] = []
@@ -884,17 +912,8 @@ def execute_codex_round(
     last_rollout_probe = float("-inf")
 
     try:
-        with prompt_file.open("rb") as stdin_f, stderr_path.open("wb") as stderr_f:
-            proc = subprocess.Popen(
-                [resolve_codex_bin(), *cmd],
-                cwd=str(effective_workdir),
-                stdin=stdin_f,
-                stdout=subprocess.PIPE,
-                stderr=stderr_f,
-                env=build_env(),
-                start_new_session=True,
-                bufsize=0,
-            )
+        with stderr_path.open("wb") as stderr_f:
+            proc = launch_codex(cmd, cwd=effective_workdir, input_path=prompt_file, stderr=stderr_f)
 
             entry = {
                 "req_id": req_id,
@@ -904,9 +923,11 @@ def execute_codex_round(
             }
             with ACTIVE_LOCK:
                 ACTIVE_BY_REQ_ID[req_id] = entry
-                ACTIVE_BY_TASK_ID[task_id] = entry
+                ACTIVE_BY_TASK_ID[task_key] = entry
 
             meta["pid"] = proc.pid
+            if WINDOWS:
+                meta["windows_job"] = proc.castor_job.name
             meta["updated_at"] = utc_now_iso()
             telemetry.save_round_meta(STATE_ROOT, task_dir, meta)
             notify_activity(meta, progress_token, 0)
@@ -993,11 +1014,11 @@ def execute_codex_round(
             proc.stdout.close()
         with ACTIVE_LOCK:
             ACTIVE_BY_REQ_ID.pop(req_id, None)
-            if ACTIVE_BY_TASK_ID.get(task_id, {}).get("req_id") == req_id:
-                ACTIVE_BY_TASK_ID.pop(task_id, None)
+            if ACTIVE_BY_TASK_ID.get(task_key, {}).get("req_id") == req_id:
+                ACTIVE_BY_TASK_ID.pop(task_key, None)
 
     duration = round(time.monotonic() - started_mono, 2)
-    if cancel_flag.is_set():
+    if cancel_flag.is_set() or (WINDOWS and exit_code == CANCEL_EXIT_CODE):
         final_status = "cancelled"
     elif exit_code == 0 and not fatal_errors:
         final_status = "completed"
@@ -1020,6 +1041,7 @@ def execute_codex_round(
         error_summary=error_summary or None,
     )
     meta.pop("_rollout_round_start", None)
+    meta.pop("windows_job", None)
     kind = "dispatch" if prompt_file.name == "spec.md" else "resume"
     round_entry = telemetry.round_record(round_num, kind, prompt_file, meta)
     meta.pop("_rollout_usage_baseline", None)
@@ -1236,7 +1258,7 @@ def resume_codex_round(
     if loaded:
         if not args.get("task_id") and session_id != loaded.get("session_id"):
             raise ValueError(f"Task ID '{task_id}' is already used by another session. Pass the intended task_id.")
-        if is_pid_alive(loaded.get("pid")):
+        if pid_alive(loaded.get("pid"), loaded.get("windows_job")):
             raise ValueError(f"Task '{task_id}' is currently running. Wait for it or cancel it first.")
         meta = loaded
         previous = telemetry.reconstruct_task_record(task_dir, meta)
@@ -1328,8 +1350,8 @@ def handle_codex_feedback(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
 
 def task_is_alive(meta: Dict[str, Any], task_dir: Path) -> bool:
     with ACTIVE_LOCK:
-        claimed = meta.get("task_id", task_dir.name) in CLAIMED_TASKS
-    return meta.get("status") == "running" and (claimed or is_pid_alive(meta.get("pid")))
+        claimed = os.path.normcase(task_dir.name) in CLAIMED_TASKS
+    return meta.get("status") == "running" and (claimed or pid_alive(meta.get("pid"), meta.get("windows_job")))
 
 
 def primary_prompt(task_dir):
@@ -1885,15 +1907,15 @@ def handle_codex_cancel(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
     meta = read_json_safe(meta_path)
 
     with ACTIVE_LOCK:
-        entry = ACTIVE_BY_TASK_ID.get(task_id)
+        entry = ACTIVE_BY_TASK_ID.get(os.path.normcase(task_id))
 
     killed = False
     if entry is not None:
         entry["cancel_flag"].set()
         killed = terminate_process_group(entry["proc"])
-    elif meta and meta.get("status") == "running" and is_pid_alive(meta.get("pid")):
+    elif meta and meta.get("status") == "running" and pid_alive(meta.get("pid"), meta.get("windows_job")):
         pid = meta["pid"]
-        killed = terminate_process_group(None, pid=pid)
+        killed = terminate_process_group(None, pid=pid, job_name=meta.get("windows_job"))
         if killed:
             with telemetry.transaction(STATE_ROOT):
                 latest = read_json_safe(meta_path)
@@ -1902,6 +1924,7 @@ def handle_codex_cancel(args: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
                     elapsed = build_task_summary(latest, True, task_dir)["elapsed_seconds"]
                     latest.update(status="cancelled", pid=None, current_activity="cancelled",
                                   updated_at=now, finished_at=now, duration_seconds=elapsed)
+                    latest.pop("windows_job", None)
                     latest["rounds"] = telemetry.reconstruct_task_record(task_dir, latest)["rounds"]
                     latest["rounds"][-1]["duration_estimated"] = elapsed is not None
                     telemetry.update_totals(latest, task_dir)
@@ -2391,6 +2414,7 @@ def cleanup_all_active() -> None:
 
 
 def main() -> int:
+    configure_stdio()
     TASKS_ROOT.mkdir(parents=True, exist_ok=True)
     WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
 

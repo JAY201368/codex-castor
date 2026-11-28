@@ -492,7 +492,7 @@
           </article>
           <article class="ledger-panel" id="tool-cancel">
             <header class="instrument-title"><h3>codex_cancel</h3><span class="mode off">background: off</span></header>
-            <p>Stop a running Codex process group. The server sends SIGTERM and escalates to SIGKILL if needed.</p>
+            <p>Stop Codex and its child processes using a Windows Job Object or a macOS/Linux process group.</p>
             <div class="ledger-content">
               <table class="parameters">
                 <thead><tr><th scope="col">Parameter</th><th scope="col">Use</th></tr></thead>
@@ -686,15 +686,23 @@
         <ol class="inscriptions">
           <li class="inscription">
             <h3 id="command-title-1">Install Codex Castor</h3>
-            <p>Clone the repository and run the installer. Add <code>--install-statusline</code> to show active tasks below Antigravity CLI’s built-in status bar. Reload Antigravity afterward.</p>
+            <p>Clone the repository and run the installer for your operating system. Add <code>--install-statusline</code> to show active tasks below Antigravity CLI’s built-in status bar. Reload Antigravity afterward.</p>
+            <p>macOS and Linux</p>
             <div class="command" data-copy-block>
               <pre><code>git clone https://github.com/JAY201368/codex-castor.git &amp;&amp; cd codex-castor &amp;&amp; ./scripts/install.sh</code></pre>
+              <button type="button" class="copy-button" aria-describedby="command-title-1" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>
+            </div>
+            <p>Windows 11 x64 · PowerShell</p>
+            <div class="command" data-copy-block>
+              <pre><code>git clone https://github.com/JAY201368/codex-castor.git
+Set-Location codex-castor
+py -3 scripts/install.py</code></pre>
               <button type="button" class="copy-button" aria-describedby="command-title-1" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>
             </div>
           </li>
           <li class="inscription">
             <h3 id="command-title-2">Verify the installation</h3>
-            <p>From the clone, check the installed configuration and run an MCP stdio handshake.</p>
+            <p>From the clone, check the installed configuration and run an MCP stdio handshake. On Windows run <code>py -3 scripts/doctor.py</code>.</p>
             <div class="command" data-copy-block>
               <pre><code>python3 scripts/doctor.py</code></pre>
               <button type="button" class="copy-button" aria-describedby="command-title-2" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>
@@ -702,7 +710,7 @@
           </li>
           <li class="inscription">
             <h3 id="command-title-3">Uninstall when needed</h3>
-            <p>Remove the installer-managed integration. Add <code>--purge-state</code> if you also want to remove saved Castor state.</p>
+            <p>Remove the installer-managed integration. On Windows run <code>py -3 scripts/install.py --uninstall</code>. Add <code>--purge-state</code> if you also want to remove saved Castor state.</p>
             <div class="command" data-copy-block>
               <pre><code>python3 scripts/install.py --uninstall</code></pre>
               <button type="button" class="copy-button" aria-describedby="command-title-3" data-copy-command data-copied-label="Copied ✓" data-manual-label="Selected · copy it manually" hidden>Copy</button>

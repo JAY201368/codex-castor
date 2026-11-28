@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
-import fcntl
 import json
 import os
 import re
@@ -13,6 +12,8 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+
+from castor_platform import file_lock, replace_file
 
 TOKEN_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
@@ -43,8 +44,7 @@ def transaction(state_root: Path):
     """Serialize read-modify-write across MCP threads and local CLI processes."""
     with LOCK:
         state_root.mkdir(parents=True, exist_ok=True)
-        with (state_root / ".telemetry.lock").open("a") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with file_lock(state_root / ".telemetry.lock"):
             yield
 
 
@@ -59,7 +59,7 @@ def atomic_output(path: Path):
     try:
         with stream:
             yield stream
-        os.replace(temp, path)
+        replace_file(temp, path)
     finally:
         temp.unlink(missing_ok=True)
 

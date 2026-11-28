@@ -43,7 +43,7 @@ Structure every `spec` with these sections:
 - **ZERO POLLING**:
   - `codex_dispatch` and `codex_resume` are configured with `"background": "always"` and wake you automatically upon completion.
   - After dispatching, **NEVER** poll `codex_status` or `codex_monitor`, run `sleep`, or schedule a polling timer.
-  - In the dispatch notice, give the user the `task_id`, scope, explicit `model` and `reasoning_effort` (or inherited values for a resume), and the worktree branch if enabled. Point them to `python3 scripts/watch.py`, the Antigravity CLI status bar, or Antigravity App’s **Codex Monitor** panel for live updates. The monitor shows Codex’s runtime model and effort once confirmed.
+  - In the dispatch notice, give the user the `task_id`, scope, explicit `model` and `reasoning_effort` (or inherited values for a resume), and the worktree branch if enabled. For live updates, point them to `python3 scripts/watch.py` on macOS or Linux, `py -3 scripts/watch.py` on Windows, the Antigravity CLI status bar, or Antigravity App’s **Codex Monitor** panel. The monitor shows Codex’s runtime model and effort once confirmed.
   - Continue unrelated work or end your turn to wait for the automatic wakeup. Call `codex_status` for a one-time progress check or `codex_monitor` to open or refresh the panel only when the user asks.
 
 ## 4. Independent Acceptance Workflow (Upon Wakeup)

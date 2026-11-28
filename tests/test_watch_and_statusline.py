@@ -86,7 +86,7 @@ class TaskFixture(unittest.TestCase):
 
     def run_cli(self, script, *args, stdin=""):
         result = subprocess.run(
-            self.command(script, *args), input=stdin, text=True,
+            self.command(script, *args), input=stdin, encoding="utf-8",
             capture_output=True, env=self.env, timeout=5, check=True,
         )
         self.assertEqual(result.stderr, "")
@@ -327,8 +327,12 @@ class WatchTests(TaskFixture):
                 final = self.wait_for_output(log, "💬 Second round\n✓ completed", process)
                 self.assertEqual(final.count("turn.completed"), 1)
                 self.assertEqual(final.count("💬 Second round"), 1)
-                process.send_signal(signal.SIGINT)
-                self.assertEqual(process.wait(timeout=3), 0)
+                if os.name != "nt":
+                    process.send_signal(signal.SIGINT)
+                    self.assertEqual(process.wait(timeout=3), 0)
+                else:
+                    process.terminate()
+                    process.wait(timeout=3)
                 self.assertEqual(process.stderr.read(), "")
             finally:
                 if process.poll() is None:

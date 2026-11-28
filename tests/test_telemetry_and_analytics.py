@@ -101,6 +101,35 @@ class LedgerTests(unittest.TestCase):
             text = f"# Title\n{heading}\n\n<!-- drafting notes -->\n~~~\ncode block\n~~~\n* Enable telemetry.\n## Next"
             self.assertEqual(telemetry.extract_summary(text), "Enable telemetry.")
 
+    def test_telemetry_transaction_serializes_separate_processes(self):
+        self.state.mkdir()
+        counter = self.state / "counter"
+        counter.write_text("0", encoding="ascii")
+        script = f"""
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, {str(ROOT / 'mcp')!r})
+from telemetry import transaction
+
+counter = Path(sys.argv[1])
+for _ in range(5):
+    with transaction(counter.parent):
+        value = int(counter.read_text(encoding='ascii'))
+        time.sleep(0.02)
+        counter.write_text(str(value + 1), encoding='ascii')
+"""
+
+        def increment():
+            subprocess.run([sys.executable, "-c", script, str(counter)], check=True, timeout=10)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            workers = [executor.submit(increment) for _ in range(3)]
+            for worker in workers:
+                worker.result()
+        self.assertEqual(counter.read_text(encoding="ascii"), "15")
+
     def test_session_title_uses_heading_or_objective(self):
         self.assertEqual(telemetry.extract_title(
             "<!-- # Hidden -->\n~~~md\n# Example\n~~~\n# Task Q2: **Review** [runtime](target) `state`\nBody"

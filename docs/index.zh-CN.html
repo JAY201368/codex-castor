@@ -494,7 +494,7 @@
           </article>
           <article class="ledger-panel" id="tool-cancel">
             <header class="instrument-title"><h3>codex_cancel</h3><span class="mode off">background: off</span></header>
-            <p>立即终止运行中的 Codex 进程组（先发送 SIGTERM，超时后补发 SIGKILL）。</p>
+            <p>停止 Codex 及其后代进程。Windows 使用 Job Object，macOS 和 Linux 使用进程组。</p>
             <div class="ledger-content">
               <table class="parameters">
                 <thead><tr><th scope="col">参数</th><th scope="col">用途</th></tr></thead>
@@ -688,15 +688,23 @@
         <ol class="inscriptions">
           <li class="inscription">
             <h3 id="command-title-1">安装 Codex Castor</h3>
-            <p>克隆仓库并执行安装脚本。如需在 Antigravity CLI 内置状态栏下方显示运行中的任务，安装时加 <code>--install-statusline</code>。安装后重新加载 Antigravity。</p>
+            <p>克隆仓库并执行对应系统的安装命令。如需在 Antigravity CLI 内置状态栏下方显示运行中的任务，安装时加 <code>--install-statusline</code>。安装后重新加载 Antigravity。</p>
+            <p>macOS 和 Linux</p>
             <div class="command" data-copy-block>
               <pre><code>git clone https://github.com/JAY201368/codex-castor.git &amp;&amp; cd codex-castor &amp;&amp; ./scripts/install.sh</code></pre>
+              <button type="button" class="copy-button" aria-describedby="command-title-1" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button>
+            </div>
+            <p>Windows 11 x64 · PowerShell</p>
+            <div class="command" data-copy-block>
+              <pre><code>git clone https://github.com/JAY201368/codex-castor.git
+Set-Location codex-castor
+py -3 scripts/install.py</code></pre>
               <button type="button" class="copy-button" aria-describedby="command-title-1" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button>
             </div>
           </li>
           <li class="inscription">
             <h3 id="command-title-2">运行环境诊断</h3>
-            <p>在仓库目录中检查配置与依赖，并实测一次 MCP stdio 握手。</p>
+            <p>在仓库目录中检查配置与依赖，并实测一次 MCP stdio 握手。Windows 上运行 <code>py -3 scripts/doctor.py</code>。</p>
             <div class="command" data-copy-block>
               <pre><code>python3 scripts/doctor.py</code></pre>
               <button type="button" class="copy-button" aria-describedby="command-title-2" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button>
@@ -704,7 +712,7 @@
           </li>
           <li class="inscription">
             <h3 id="command-title-3">按需卸载</h3>
-            <p>移除安装器写入的 MCP 配置、技能与规则块；如需一并清除历史运行记录，再附带 <code>--purge-state</code>。</p>
+            <p>移除安装器写入的 MCP 配置、技能与规则块。Windows 上运行 <code>py -3 scripts/install.py --uninstall</code>。如需一并清除历史运行记录，再加上 <code>--purge-state</code>。</p>
             <div class="command" data-copy-block>
               <pre><code>python3 scripts/install.py --uninstall</code></pre>
               <button type="button" class="copy-button" aria-describedby="command-title-3" data-copy-command data-copied-label="已复制 ✓" data-manual-label="已选中，请手动复制" hidden>复制</button>

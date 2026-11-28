@@ -12,6 +12,13 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "mcp"))
+
+from castor_platform import (
+    WINDOWS, command_targets, configure_stdio, executable_path, find_codex as discover_codex,
+    python_shell_command, replace_file,
+)
+
 SERVER_NAME = "codex-castor"
 START_MARKER = "<!-- codex-castor:start -->"
 END_MARKER = "<!-- codex-castor:end -->"
@@ -31,25 +38,8 @@ TOOL_BACKGROUNDS = {
 }
 
 
-def executable_path(value):
-    if not value:
-        return None
-    found = shutil.which(os.path.expanduser(value))
-    return os.path.abspath(found) if found else None
-
-
 def find_codex():
-    configured = executable_path(os.environ.get("CODEX_BIN"))
-    if configured:
-        return configured
-    extra = (
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        str(Path.home() / ".local" / "bin"),
-        str(Path.home() / ".npm-global" / "bin"),
-    )
-    search = os.pathsep.join((os.environ.get("PATH") or os.defpath, *extra))
-    return shutil.which("codex", path=search)
+    return executable_path(os.environ.get("CODEX_BIN")) or discover_codex()
 
 
 def server_entry(python, server, codex):
@@ -69,10 +59,9 @@ def server_entry(python, server, codex):
 
 
 def hooks_entry(python, hook_path):
-    hook = shlex.quote(str(hook_path))
     return {
         "PreInvocation": [
-            {"type": "command", "command": f"[ ! -f {hook} ] || {shlex.quote(str(python))} {hook}", "timeout": 5},
+            {"type": "command", "command": python_shell_command(python, hook_path), "timeout": 5},
         ],
     }
 
@@ -87,7 +76,7 @@ def read_json_object(path):
     except FileNotFoundError:
         return None, {}
     try:
-        data = json.loads(raw.decode("utf-8"), parse_constant=reject_json_constant)
+        data = json.loads(raw.decode("utf-8-sig"), parse_constant=reject_json_constant)
     except ValueError as exc:
         raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -133,7 +122,7 @@ def hooks_update(path, entry):
     return raw, json_bytes(data)
 
 
-def statusline_update(path, target, *, uninstall, force):
+def statusline_update(path, target, *, uninstall, force, python=None):
     raw, settings = read_json_object(path)
     statusline = settings.get("statusLine", {})
     if not isinstance(statusline, dict):
@@ -141,7 +130,7 @@ def statusline_update(path, target, *, uninstall, force):
             return raw, None
         raise ValueError(f"{path} must have an object-valued statusLine")
     command = statusline.get("command")
-    castor_owned = isinstance(command, str) and Path(command).parts[-2:] == (SERVER_NAME, "statusline.py")
+    castor_owned = command_targets(command, target, allow_bare=True)
     if uninstall:
         if not castor_owned:
             return raw, None
@@ -153,7 +142,8 @@ def statusline_update(path, target, *, uninstall, force):
                 f"{path} already has a custom statusLine.command. "
                 "Use --force-statusline to replace it."
             )
-        updated = {"type": "command", "command": str(target), "enabled": True, "stack_with_default": True}
+        command = python_shell_command(python, target) if WINDOWS else shlex.quote(str(target))
+        updated = {"type": "command", "command": command, "enabled": True, "stack_with_default": True}
         if statusline == updated:
             return raw, None
         settings["statusLine"] = updated
@@ -222,7 +212,7 @@ def atomic_write(path, data, mode=None):
             handle.close()
             if mode is not None:
                 temporary.chmod(mode)
-            os.replace(temporary, path)
+            replace_file(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -243,20 +233,26 @@ def write_config_update(path, original, updated, dry_run):
 
 def install_artifact(source, target, data, mode, dry_run):
     if data is None:
-        if target.is_symlink() and target.readlink() == source:
+        if target.is_symlink() and target.resolve() == source.resolve():
             return
         print(f"Link {target} -> {source}")
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=target.parent) as directory:
                 temporary = Path(directory) / target.name
-                temporary.symlink_to(source)
-                os.replace(temporary, target)
+                try:
+                    temporary.symlink_to(source)
+                except OSError as exc:
+                    if WINDOWS and getattr(exc, "winerror", None) == 1314:
+                        raise ValueError("--symlink requires Windows Developer Mode or permission to create symlinks. "
+                                         "Run without --symlink to install copies.") from exc
+                    raise
+                replace_file(temporary, target)
     elif (
         target.is_symlink()
         or not target.is_file()
         or target.read_bytes() != data
-        or stat.S_IMODE(target.stat().st_mode) != mode
+        or (not WINDOWS and stat.S_IMODE(target.stat().st_mode) != mode)
     ):
         print(f"Copy {source} -> {target}")
         if not dry_run:
@@ -301,12 +297,14 @@ def run(args):
             cli_settings, statusline_target, uninstall=True, force=False,
         )
     if not args.uninstall:
-        python = executable_path(args.python or sys.executable or "python3")
+        default_python = sys.executable or ("python.exe" if WINDOWS else "python3")
+        python = executable_path(args.python or default_python)
         if not python:
-            raise ValueError(f"Python executable not found: {args.python or sys.executable or 'python3'}")
+            raise ValueError(f"Python executable not found: {args.python or default_python}")
         codex = executable_path(args.codex_bin) if args.codex_bin else find_codex()
         if args.codex_bin and not codex:
-            raise ValueError(f"Codex executable not found: {args.codex_bin}")
+            native = " (provide the native codex.exe)" if WINDOWS else ""
+            raise ValueError(f"Codex executable not found: {args.codex_bin}{native}")
         if not codex:
             print("Warning: Codex executable not found. The server will search at runtime.", file=sys.stderr)
         entry = server_entry(python, install_dir / "server.py", os.path.abspath(codex) if codex else None)
@@ -314,6 +312,8 @@ def run(args):
         for name, target, mode in (
             ("mcp/server.py", install_dir / "server.py", 0o755),
             ("mcp/telemetry.py", install_dir / "telemetry.py", 0o644),
+            ("mcp/castor_platform.py", install_dir / "castor_platform.py", 0o644),
+            ("mcp/windows_process.py", install_dir / "windows_process.py", 0o644),
             ("scripts/analytics.py", install_dir / "analytics.py", 0o755),
             ("scripts/hook.py", hook_target, 0o755),
             ("mcp/report.schema.json", install_dir / "report.schema.json", 0o644),
@@ -330,7 +330,7 @@ def run(args):
             statusline = REPO_ROOT / "scripts" / "statusline.py"
             if statusline.is_file():
                 raw_settings, updated_settings = statusline_update(
-                    cli_settings, statusline_target, uninstall=False, force=args.force_statusline,
+                    cli_settings, statusline_target, uninstall=False, force=args.force_statusline, python=python,
                 )
                 artifacts.append((statusline, statusline_target, statusline.read_bytes(), 0o755))
             else:
@@ -371,10 +371,15 @@ def run(args):
         print(f"PreInvocation hook configured in {hooks_path}")
         print(f"Server, schema, and hook in {install_dir}")
         print(f"Skill in {skill_dir}")
-        print(f"Run python3 scripts/doctor.py --gemini-dir {shlex.quote(str(gemini))}")
+        if WINDOWS:
+            escaped = str(gemini).replace("'", "''")
+            print(f"Run py -3 scripts/doctor.py --gemini-dir '{escaped}'")
+        else:
+            print(f"Run python3 scripts/doctor.py --gemini-dir {shlex.quote(str(gemini))}")
 
 
 def main():
+    configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gemini-dir", type=Path, default=Path.home() / ".gemini")
     parser.add_argument("--python", metavar="PATH", help="Python executable for the MCP server and hook")

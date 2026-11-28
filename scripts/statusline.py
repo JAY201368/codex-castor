@@ -5,6 +5,14 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MODULE_DIR = HERE if (HERE / "castor_platform.py").is_file() else HERE.parent / "mcp"
+if str(MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULE_DIR))
+
+from castor_platform import configure_stdio, pid_alive, read_available_stdin
 
 
 LIVE_STATUSES = {"starting", "running"}
@@ -31,18 +39,6 @@ def read_meta(path):
         return {}
 
 
-def pid_alive(pid):
-    if type(pid) is not int or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except (OSError, OverflowError):
-        return False
-    return True
-
-
 def scan_tasks(root):
     try:
         with os.scandir(os.path.join(root, "tasks")) as entries:
@@ -53,7 +49,7 @@ def scan_tasks(root):
                 if not task:
                     continue
                 task["task_id"] = task.get("task_id") or entry.name
-                task["alive"] = task.get("status") in LIVE_STATUSES and pid_alive(task.get("pid"))
+                task["alive"] = task.get("status") in LIVE_STATUSES and pid_alive(task.get("pid"), task.get("windows_job"))
                 yield entry.path, task
     except OSError:
         return
@@ -257,18 +253,8 @@ def trim(text, width):
 
 
 def stdin_width():
-    import select
-
-    if sys.stdin.isatty():
-        return 100
     try:
-        fd = sys.stdin.fileno()
-        data = bytearray()
-        while len(data) < 65536 and select.select([fd], [], [], 0)[0]:
-            chunk = os.read(fd, min(4096, 65536 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
+        data = read_available_stdin(65536)
         value = object_value(json.loads(data)).get("terminal_width")
         if type(value) is int and value > 0:
             return value
@@ -289,6 +275,7 @@ def demo_task():
 
 
 def main():
+    configure_stdio()
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)

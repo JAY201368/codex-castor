@@ -5,8 +5,6 @@ import argparse
 import json
 import os
 import queue
-import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +12,10 @@ import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "mcp"))
+
+from castor_platform import WINDOWS, command_targets, configure_stdio, executable_path, find_codex
+
 SERVER_NAME = "codex-castor"
 TIMEOUT = 5
 MONITOR_URI = "ui://codex-castor/monitor.html"
@@ -41,7 +43,8 @@ def reject_json_constant(value):
 def probe_version(name, executable):
     try:
         result = subprocess.run(
-            [executable, "--version"], capture_output=True, text=True, errors="replace", timeout=TIMEOUT
+            [executable, "--version"], capture_output=True, text=True, errors="replace", timeout=TIMEOUT,
+            encoding="utf-8" if WINDOWS else None,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return check(name, "FAIL", str(exc))
@@ -54,7 +57,7 @@ def probe_version(name, executable):
 
 def read_config(path):
     try:
-        data = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
+        data = json.loads(path.read_text(encoding="utf-8-sig"), parse_constant=reject_json_constant)
         if not isinstance(data, dict) or not isinstance(data.get("mcpServers"), dict):
             raise ValueError("expected an object-valued mcpServers")
         entry = data["mcpServers"].get(SERVER_NAME)
@@ -80,31 +83,25 @@ def check_codex(args, entry):
     candidates = (args.codex_bin,) if args.codex_bin else (os.environ.get("CODEX_BIN"), configured)
     for candidate in candidates:
         if isinstance(candidate, str) and candidate:
-            executable = shutil.which(os.path.expanduser(candidate))
+            executable = executable_path(candidate)
             if executable:
                 return probe_version("codex_cli", executable)
     if args.codex_bin:
         return check("codex_cli", "FAIL", f"Codex executable not found: {args.codex_bin}")
-    search = os.pathsep.join((
-        os.environ.get("PATH") or os.defpath,
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        str(Path.home() / ".local" / "bin"),
-        str(Path.home() / ".npm-global" / "bin"),
-    ))
-    executable = shutil.which("codex", path=search)
+    executable = find_codex()
     if executable:
         return probe_version("codex_cli", executable)
     return check(
         "codex_cli", "WARN" if args.repo_only else "FAIL",
-        "Codex executable not found. Set CODEX_BIN or add codex to PATH.",
+        f"Codex executable not found. Set CODEX_BIN or add {'codex.exe' if WINDOWS else 'codex'} to PATH.",
     )
 
 
 def check_files(name, server, skill, analytics, hook_script):
     schema = server.with_name("report.schema.json")
     try:
-        for path in (server, schema, server.with_name("telemetry.py"), analytics, hook_script, skill):
+        for path in (server, schema, server.with_name("telemetry.py"), server.with_name("castor_platform.py"),
+                     server.with_name("windows_process.py"), analytics, hook_script, skill):
             if not path.is_file():
                 raise ValueError(f"Missing file: {path}")
         data = json.loads(schema.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
@@ -123,7 +120,7 @@ def check_files(name, server, skill, analytics, hook_script):
 def check_hooks(hooks_path, hook_script):
     name = "hooks_config"
     try:
-        data = json.loads(hooks_path.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
+        data = json.loads(hooks_path.read_text(encoding="utf-8-sig"), parse_constant=reject_json_constant)
     except (OSError, ValueError) as exc:
         return check(name, "FAIL", f"{hooks_path}: {exc}")
     entry = data.get(SERVER_NAME) if isinstance(data, dict) else None
@@ -132,13 +129,8 @@ def check_hooks(hooks_path, hook_script):
         for handler in handlers:
             if not isinstance(handler, dict) or handler.get("type") not in (None, "command"):
                 continue
-            command = handler.get("command")
-            if isinstance(command, str):
-                try:
-                    if str(hook_script) in shlex.split(command, comments=True):
-                        return check(name, "PASS", str(hooks_path))
-                except ValueError:
-                    continue
+            if command_targets(handler.get("command"), hook_script):
+                return check(name, "PASS", str(hooks_path))
     return check(name, "FAIL", f"{hooks_path}: {SERVER_NAME}.PreInvocation must reference {hook_script}")
 
 
@@ -151,16 +143,16 @@ def check_rules(path):
     return check("gemini_rules", "WARN", f"{path} does not mention {SERVER_NAME}")
 
 
-def check_cli_statusline(path):
+def check_cli_statusline(path, target):
     try:
-        settings = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_json_constant)
+        settings = json.loads(path.read_text(encoding="utf-8-sig"), parse_constant=reject_json_constant)
         statusline = settings.get("statusLine") if isinstance(settings, dict) else None
         command = statusline.get("command") if isinstance(statusline, dict) else None
     except FileNotFoundError:
         command = None
     except (OSError, ValueError) as exc:
         return check("cli_statusline", "INFO", f"Optional status line could not be checked in {path}: {exc}")
-    if isinstance(command, str) and Path(command).parts[-2:] == (SERVER_NAME, "statusline.py"):
+    if command_targets(command, target, allow_bare=True):
         return check("cli_statusline", "PASS", f"Codex Castor status line configured in {path}")
     return check("cli_statusline", "INFO", "Optional Codex Castor status line can be installed with --install-statusline")
 
@@ -262,19 +254,31 @@ def exchange(process, output):
         raise ValueError("codex_monitor did not return empty analytics for the temporary state")
 
 
-def check_handshake(server):
+def check_handshake(server, entry=None):
     name = "mcp_stdio_handshake"
     try:
         with tempfile.TemporaryDirectory(prefix="codex-castor-doctor-") as state, tempfile.TemporaryFile() as stderr:
-            env = {**os.environ, "CODEX_CASTOR_STATE_DIR": state, "PYTHONUNBUFFERED": "1"}
+            command = [sys.executable, str(server)]
+            env = os.environ.copy()
+            if entry:
+                executable, args, overrides = entry.get("command"), entry.get("args"), entry.get("env", {})
+                if not isinstance(executable, str) or not executable_path(executable):
+                    raise ValueError(f"MCP command executable not found: {executable}")
+                if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+                    raise ValueError("MCP command args must be a list of strings")
+                if not isinstance(overrides, dict) or not all(isinstance(value, str) for value in overrides.values()):
+                    raise ValueError("MCP command env must map names to strings")
+                command = [executable_path(executable), *args]
+                env.update(overrides)
+            env.update(CODEX_CASTOR_STATE_DIR=state, PYTHONUNBUFFERED="1")
             process = subprocess.Popen(
-                [sys.executable, str(server)],
+                command,
                 env=env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=stderr,
             )
-            with process.stdin:
+            with process.stdin, process.stdout:
                 output = queue.Queue()
                 reader = threading.Thread(target=read_stdout, args=(process.stdout, output), daemon=True)
                 reader.start()
@@ -307,7 +311,7 @@ def check_handshake(server):
                     stderr.seek(max(0, stderr.tell() - 1500))
                     detail = stderr.read().decode("utf-8", errors="replace").strip()
                     return check(name, "FAIL", f"{error}\n{detail}" if detail else error)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return check(name, "FAIL", str(exc))
     return check(
         name, "PASS",
@@ -316,6 +320,7 @@ def check_handshake(server):
 
 
 def main():
+    configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gemini-dir", type=Path, default=Path.home() / ".gemini")
     parser.add_argument("--repo-only", action="store_true", help="Check the repository without using an installation")
@@ -340,16 +345,16 @@ def main():
 
     checks = [
         check("python_version", "PASS" if sys.version_info >= (3, 9) else "FAIL", sys.version.split()[0]),
-        probe_version("git_cli", "git"),
+        probe_version("git_cli", executable_path("git") or "git"),
         check_codex(args, entry),
         check_files("repo_files" if args.repo_only else "installed_files", server, skill, analytics, hook_script),
     ]
     if not args.repo_only:
         checks.extend([
             config_check, check_hooks(config_dir / "hooks.json", hook_script), check_rules(gemini / "GEMINI.md"),
-            check_cli_statusline(gemini / "antigravity-cli" / "settings.json"),
+            check_cli_statusline(gemini / "antigravity-cli" / "settings.json", server.with_name("statusline.py")),
         ])
-    checks.append(check_handshake(server))
+    checks.append(check_handshake(server, entry))
     ok = all(item["status"] != "FAIL" for item in checks)
     if args.json:
         print(json.dumps({"ok": ok, "checks": checks}, indent=2))

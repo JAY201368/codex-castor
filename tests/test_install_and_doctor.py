@@ -13,6 +13,8 @@ from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
+from platform_fixture import WINDOWS, environment, platform_shell, script_executable
+
 ROOT = Path(__file__).resolve().parent.parent
 INSTALL = ROOT / "scripts" / "install.py"
 WRAPPER = ROOT / "scripts" / "install.sh"
@@ -48,7 +50,7 @@ class ScriptTests(unittest.TestCase):
         self.root = Path(directory.name).resolve()
         self.home = self.root / "home"
         self.home.mkdir()
-        self.gemini = self.home / "Gemini's config"
+        self.gemini = self.home / ("Gemini 的配置 & logs" if WINDOWS else "Gemini's config")
         self.config = self.gemini / "config" / "mcp_config.json"
         self.backup = self.config.with_suffix(".json.bak")
         self.hooks = self.config.with_name("hooks.json")
@@ -61,6 +63,8 @@ class ScriptTests(unittest.TestCase):
         self.artifacts = {
             self.install_dir / "server.py": ROOT / "mcp" / "server.py",
             self.install_dir / "telemetry.py": ROOT / "mcp" / "telemetry.py",
+            self.install_dir / "castor_platform.py": ROOT / "mcp" / "castor_platform.py",
+            self.install_dir / "windows_process.py": ROOT / "mcp" / "windows_process.py",
             self.install_dir / "analytics.py": ROOT / "scripts" / "analytics.py",
             self.install_dir / "hook.py": ROOT / "scripts" / "hook.py",
             self.install_dir / "report.schema.json": ROOT / "mcp" / "report.schema.json",
@@ -68,7 +72,7 @@ class ScriptTests(unittest.TestCase):
         }
         self.codex = self.version_script(self.root / "bin" / "codex", "codex mock 1.2.3")
         self.env = {
-            **os.environ,
+            **environment(),
             "HOME": str(self.home),
             "USERPROFILE": str(self.home),
             "CODEX_BIN": str(self.codex),
@@ -79,14 +83,12 @@ class ScriptTests(unittest.TestCase):
         self.env.pop("CODEX_CASTOR_MONITOR_HTML", None)
 
     def version_script(self, path, message, code=0):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        if WINDOWS:
+            return script_executable(path, f"import sys\nassert sys.argv[1:] == ['--version']\nprint({message!r})\nsys.exit({code})\n")
+        return script_executable(path,
             f'#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "--version" ] || exit 99\n'
             f"printf '%s\\n' '{message}'\nexit {code}\n",
-            encoding="utf-8",
         )
-        path.chmod(0o755)
-        return path
 
     def run_script(self, script, *args, expected=0, env=None, python=sys.executable):
         command = [str(script)] if script == WRAPPER else [python, str(script)]
@@ -96,6 +98,7 @@ class ScriptTests(unittest.TestCase):
             cwd=self.root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=25,
         )
         self.assertEqual(result.returncode, expected, f"{result.stdout}\n{result.stderr}")
@@ -122,8 +125,10 @@ class ScriptTests(unittest.TestCase):
     def run_installed_hook(self, python):
         target = self.install_dir / "hook.py"
         hook = shlex.quote(str(target))
+        command = (f'if exist "{target}" "{python}" -X utf8 "{target}"' if WINDOWS else
+                   f"[ ! -f {hook} ] || {shlex.quote(str(python))} {hook}")
         expected = {"PreInvocation": [{
-            "type": "command", "command": f"[ ! -f {hook} ] || {shlex.quote(str(python))} {hook}", "timeout": 5,
+            "type": "command", "command": command, "timeout": 5,
         }]}
         actual = read_json(self.hooks)["codex-castor"]
         self.assertEqual(actual, expected)
@@ -131,7 +136,7 @@ class ScriptTests(unittest.TestCase):
         transcript.touch()
         payload = {"conversationId": "install-test", "transcriptPath": str(transcript), "hookEventName": "PreInvocation"}
         result = subprocess.run(
-            ["/bin/sh", "-c", actual["PreInvocation"][0]["command"]],
+            platform_shell(actual["PreInvocation"][0]["command"]),
             env=self.env, cwd=self.root, input=json.dumps(payload), text=True, capture_output=True, timeout=5,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -160,22 +165,26 @@ class ScriptTests(unittest.TestCase):
             entries[path.relative_to(self.gemini)] = (contents, info.st_mtime_ns, info.st_mode)
         return entries
 
-    def test_fresh_install_matches_example_and_preserves_python_symlink(self):
-        python = self.root / "venv" / "bin" / "python3"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+    def test_fresh_install_matches_example_and_preserves_python_executable(self):
+        python = Path(sys.executable)
+        if not WINDOWS:
+            python = self.root / "venv" / "bin" / "python3"
+            python.parent.mkdir(parents=True)
+            python.symlink_to(sys.executable)
         result = self.run_script(INSTALL, "--python", python, "--codex-bin", self.codex)
-        self.assertIn("python3 scripts/doctor.py", result.stdout)
+        self.assertIn("scripts/doctor.py", result.stdout)
         for target, source in self.artifacts.items():
             self.assertFalse(target.is_symlink())
             self.assertEqual(target.read_bytes(), source.read_bytes())
-        self.assertEqual((self.install_dir / "server.py").stat().st_mode & 0o777, 0o755)
-        self.assertEqual((self.install_dir / "telemetry.py").stat().st_mode & 0o777, 0o644)
         analytics = self.install_dir / "analytics.py"
-        self.assertEqual(analytics.stat().st_mode & 0o777, 0o755)
-        self.assertEqual((self.install_dir / "hook.py").stat().st_mode & 0o777, 0o755)
+        if not WINDOWS:
+            self.assertEqual((self.install_dir / "server.py").stat().st_mode & 0o777, 0o755)
+            self.assertEqual((self.install_dir / "telemetry.py").stat().st_mode & 0o777, 0o644)
+            self.assertEqual(analytics.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((self.install_dir / "hook.py").stat().st_mode & 0o777, 0o755)
         self.run_installed_hook(python)
-        result = subprocess.run([str(analytics), "--help"], cwd=self.root, env=self.env, capture_output=True,
+        command = [str(python), str(analytics)] if WINDOWS else [str(analytics)]
+        result = subprocess.run([*command, "--help"], cwd=self.root, env=self.env, capture_output=True,
                                 text=True, timeout=5, check=True)
         self.assertIn("{summary,backfill,feedback,export}", result.stdout)
         expected = read_json(EXAMPLE)
@@ -185,7 +194,7 @@ class ScriptTests(unittest.TestCase):
         entry["env"]["CODEX_BIN"] = str(self.codex)
         actual = read_json(self.config)
         self.assertEqual(actual, expected)
-        self.assertEqual(self.config.read_text(), json.dumps(actual, indent=2) + "\n")
+        self.assertEqual(self.config.read_text(encoding="utf-8"), json.dumps(actual, ensure_ascii=False, indent=2) + "\n")
         expected_rules = f"{START}\n{RULES_SOURCE.read_text().rstrip()}\n{END}\n"
         self.assertEqual(self.rules.read_text(), expected_rules)
         self.assertFalse(self.backup.exists())
@@ -195,7 +204,7 @@ class ScriptTests(unittest.TestCase):
         env = {key: value for key, value in self.env.items() if key != "CODEX_BIN"}
         venv = self.root / "test-venv"
         subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], env=env, check=True, timeout=25)
-        python = venv / "bin" / "python3"
+        python = venv / ("Scripts/python.exe" if WINDOWS else "bin/python3")
         self.run_script(INSTALL, env=env, python=str(python))
         entry = read_json(self.config)["mcpServers"]["codex-castor"]
         self.assertEqual(entry["command"], str(python))
@@ -249,7 +258,18 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(self.rules.read_text(), f"{START}\n{RULES_SOURCE.read_text()}{END}\n")
 
     def test_wrapper_and_symlink_mode_can_switch_back_to_copies(self):
-        self.run_script(WRAPPER, "--symlink", "--skip-gemini-md", "--python", sys.executable)
+        if WINDOWS:
+            probe = self.root / "symlink-probe"
+            try:
+                probe.symlink_to(INSTALL)
+            except OSError as exc:
+                if getattr(exc, "winerror", None) != 1314:
+                    raise
+                result = self.run_script(INSTALL, "--symlink", expected=1)
+                self.assertIn("Windows Developer Mode", result.stderr)
+                self.assertFalse(self.config.exists())
+                return
+        self.run_script(INSTALL if WINDOWS else WRAPPER, "--symlink", "--skip-gemini-md", "--python", sys.executable)
         for target, source in self.artifacts.items():
             self.assertTrue(target.is_symlink())
             self.assertEqual(target.resolve(), source)
@@ -293,7 +313,7 @@ class ScriptTests(unittest.TestCase):
         user_rules = "Personal rules  \n"
         self.rules.write_text(user_rules, encoding="utf-8")
         self.install_state()
-        self.run_script(INSTALL, "--symlink")
+        self.run_script(INSTALL, *(() if WINDOWS else ("--symlink",)))
         previous_config = self.config.read_bytes()
         previous_hooks = self.hooks.read_bytes()
         result = self.run_script(INSTALL, "--uninstall")
@@ -324,9 +344,11 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual((self.install_dir / "monitor.html").read_bytes(), source_monitor.read_bytes())
         statusline = self.install_dir / "statusline.py"
         self.assertEqual(statusline.read_bytes(), installer.with_name("statusline.py").read_bytes())
-        self.assertEqual(statusline.stat().st_mode & 0o777, 0o755)
+        if not WINDOWS:
+            self.assertEqual(statusline.stat().st_mode & 0o777, 0o755)
+        expected = f'if exist "{statusline}" "{sys.executable}" -X utf8 "{statusline}"' if WINDOWS else shlex.quote(str(statusline))
         self.assertEqual(read_json(self.cli_settings)["statusLine"], {
-            "type": "command", "command": str(statusline), "enabled": True, "stack_with_default": True,
+            "type": "command", "command": expected, "enabled": True, "stack_with_default": True,
         })
         self.assertFalse(self.cli_settings.with_suffix(".json.bak").exists())
         self.assertEqual(self.doctor()["cli_statusline"]["status"], "PASS")
@@ -368,6 +390,38 @@ class ScriptTests(unittest.TestCase):
         })
         self.assertEqual(backup.read_bytes(), before_removal)
         self.assertFalse((self.install_dir / "statusline.py").exists())
+
+    @unittest.skipUnless(WINDOWS, "Windows Antigravity command shell")
+    def test_windows_hook_and_statusline_keep_literal_shell_paths(self):
+        self.gemini = self.home / "Gemini %CASTOR_TEST_MARKER%! '审阅"
+        self.env["CASTOR_TEST_MARKER"] = "must not expand"
+        self.run_script(INSTALL, "--install-statusline")
+        install_dir = self.gemini / "config" / "codex-castor"
+        hooks = read_json(install_dir.parent / "hooks.json")
+        hook_command = hooks["codex-castor"]["PreInvocation"][0]["command"]
+        settings = self.gemini / "antigravity-cli" / "settings.json"
+        status_command = read_json(settings)["statusLine"]["command"]
+        transcript = self.root / "转录.jsonl"
+        transcript.touch()
+        state = Path(self.env["CODEX_CASTOR_STATE_DIR"])
+        payload = {"conversationId": "windows-shell", "transcriptPath": str(transcript)}
+        hook = subprocess.run(platform_shell(hook_command), input=json.dumps(payload), cwd=self.root,
+                              env=self.env, capture_output=True, encoding="utf-8", timeout=10, check=True)
+        self.assertEqual(hook.stdout, "{}\n")
+        saved = read_json(state / "hook_state" / "windows-shell.json")
+        self.assertEqual(saved["transcript_path"], str(transcript))
+        task = state / "tasks" / "live" / "meta.json"
+        task.parent.mkdir(parents=True)
+        task.write_text(json.dumps({"status": "running", "pid": os.getpid(), "current_activity": "审阅"}),
+                        encoding="utf-8")
+        line = subprocess.run(platform_shell(status_command), input='{"terminal_width":120}', cwd=self.root,
+                              env=self.env, capture_output=True, encoding="utf-8", timeout=10, check=True)
+        self.assertIn("审阅", line.stdout)
+        checks = self.doctor()
+        self.assertEqual(checks["hooks_config"]["status"], "PASS")
+        self.assertEqual(checks["cli_statusline"]["status"], "PASS")
+        self.run_script(INSTALL, "--uninstall")
+        self.assertEqual(read_json(settings)["statusLine"]["command"], "")
 
     def install_state(self):
         (self.state / "tasks").mkdir(parents=True)
@@ -459,7 +513,7 @@ class ScriptTests(unittest.TestCase):
         self.run_script(INSTALL)
         target = self.install_dir / "hook.py"
         doctor = load_module(DOCTOR)
-        command = f"python3 {shlex.quote(str(target))}"
+        command = read_json(self.hooks)["codex-castor"]["PreInvocation"][0]["command"]
         for invalid in (
             [], OTHER_HOOKS, {"codex-castor": {"PreInvocation": []}},
             {"codex-castor": {"PreInvocation": [{"command": command, "type": "prompt"}]}},
@@ -497,7 +551,8 @@ class ScriptTests(unittest.TestCase):
 
     def test_doctor_reports_missing_codex_by_mode(self):
         doctor = load_module(DOCTOR)
-        with mock.patch.object(doctor.shutil, "which", return_value=None):
+        with mock.patch.object(doctor, "find_codex", return_value=None), \
+                mock.patch.object(doctor, "executable_path", return_value=None):
             for repo_only, expected in ((True, "WARN"), (False, "FAIL")):
                 with self.subTest(repo_only=repo_only):
                     item = doctor.check_codex(Namespace(codex_bin=None, repo_only=repo_only), {})

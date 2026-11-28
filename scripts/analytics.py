@@ -15,6 +15,7 @@ if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
 import telemetry
+from castor_platform import configure_stdio
 
 
 def bounded_int(minimum, maximum=None):
@@ -123,6 +124,7 @@ def export(args, state_root):
 
 
 def main():
+    configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--state-dir", type=Path, help="Override the Codex Castor state directory")

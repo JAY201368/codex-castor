@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import subprocess
+import shutil
 import sys
 import tempfile
 import threading
@@ -12,6 +13,8 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from platform_fixture import WINDOWS, environment, script_executable
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / "mcp" / "server.py"
@@ -36,6 +39,7 @@ DUAL_QUOTA = {"rateLimits": {
 MOCK_CODEX = """#!/usr/bin/env python3
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -90,7 +94,11 @@ event("thread.started", thread_id=session)
 if prompt.startswith("parallel-"):
     (sync / prompt).touch()
     wait_for(sync / "release")
-elif prompt == "slow":
+elif prompt in ("slow", "slow tree"):
+    if prompt == "slow tree":
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"],
+                                 stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr)
+        (sync / "descendant").write_text(str(child.pid), encoding="utf-8")
     time.sleep(60)
 elif prompt == "observe":
     event("turn.started")
@@ -173,10 +181,8 @@ class ServerHarness(unittest.TestCase):
         self.monitor_html = self.root / "fixture-monitor.html"
         home = self.root / "home"
         home.mkdir()
-        fake = self.root / "mock-codex"
-        fake.write_text(MOCK_CODEX, encoding="utf-8")
-        fake.chmod(0o755)
-        self.env = {name: value for name, value in os.environ.items()
+        fake = script_executable(self.root / "mock-codex", MOCK_CODEX)
+        self.env = {name: value for name, value in environment().items()
                     if not name.startswith(("GIT_", "MOCK_CODEX_"))}
         self.env.update(
             HOME=str(home),
@@ -203,6 +209,7 @@ class ServerHarness(unittest.TestCase):
         self.responses = queue.Queue()
         self.deferred = {}
         self.notifications = []
+        self.server_killed = False
         self.request_id = 0
         self.reader = threading.Thread(target=self.read_stdout, daemon=True)
         self.addCleanup(self.close_server)
@@ -230,7 +237,10 @@ class ServerHarness(unittest.TestCase):
                     self.process.kill()
                     self.process.wait()
                 self.fail("MCP server did not exit after stdin closed")
-            self.assertEqual(code, 0, self.server_log())
+            if self.server_killed:
+                self.assertNotEqual(code, 0)
+            else:
+                self.assertEqual(code, 0, self.server_log())
         finally:
             self.reader.join(timeout=TIMEOUT)
             self.process.stdout.close()
@@ -284,7 +294,7 @@ class ServerHarness(unittest.TestCase):
         return result.stdout.strip()
 
     def make_repo(self):
-        workdir = self.root / "repo with spaces"
+        workdir = self.root / ("工作目录 with spaces" if WINDOWS else "repo with spaces")
         workdir.mkdir()
         self.git(workdir, "init", "-q")
         (workdir / "tracked.txt").write_text("original\n", encoding="utf-8")
@@ -379,7 +389,12 @@ class ServerTests(ServerHarness):
         recorded_path.unlink()
         outside = self.root / "unrelated.log"
         outside.write_text("Error: unrelated failure\n")
-        recorded_path.symlink_to(outside)
+        try:
+            recorded_path.symlink_to(outside)
+        except OSError as exc:
+            if not WINDOWS or getattr(exc, "winerror", None) != 1314:
+                raise
+            self.record_failed_task(task_id, current_stderr_file=str(outside))
         self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"],
                          {"kind": "error", "text": "failed (8.75s)"})
 
@@ -429,9 +444,13 @@ class ServerTests(ServerHarness):
         task_id = "launch-failure"
         result = self.call("codex_dispatch", error=True, task_id=task_id, workdir=str(self.root), spec="launch")
         self.assertEqual(result["status"], "failed")
-        self.assertIsNone(result["exit_code"])
+        if WINDOWS:
+            self.assertNotEqual(result["exit_code"], 0)
+        else:
+            self.assertIsNone(result["exit_code"])
         meta = read_json(self.state / "tasks" / task_id / "meta.json")
-        self.assertTrue(meta["error_summary"].startswith("[Errno 8]"), meta["error_summary"])
+        message = "[WinError 193]" if WINDOWS else "[Errno 8]"
+        self.assertIn(message, meta["error_summary"])
         self.assertEqual(self.monitor()[0]["tasks"][0]["latest_activity"],
                          {"kind": "error", "text": meta["error_summary"]})
 
@@ -557,7 +576,7 @@ class ServerTests(ServerHarness):
                 server.query_codex_quota(timeout=1)
         self.assertLess(time.monotonic() - start, 4)
         self.assertTrue((self.sync / "quota-partial-response").is_file())
-        self.assertFalse(server.is_pid_alive(int(self.quota_calls.read_text())))
+        self.wait_for_pid_exit(server, int(self.quota_calls.read_text()))
 
     def test_monitor_on_demand_multi_round_detail(self):
         task = self.state / "tasks" / "review"
@@ -1018,6 +1037,7 @@ class ServerTests(ServerHarness):
         self.assertEqual(read_json(task_dir / "meta.json")["status"], "running")
 
     def test_cancel_by_tool_and_rpc_notification(self):
+        server = load_server()
         for method in ("tool", "notification"):
             with self.subTest(method=method):
                 request_id = self.send_tool("codex_dispatch", task_id=method, workdir=str(self.root), spec="slow")
@@ -1039,13 +1059,66 @@ class ServerTests(ServerHarness):
                     self.send("notifications/cancelled", {"requestId": request_id}, notification=True)
                 result = self.tool_result(request_id)
                 self.assertEqual(result["status"], "cancelled")
-                self.assertLess(result["exit_code"], 0)
+                if WINDOWS:
+                    self.assertEqual(result["exit_code"], server.CANCEL_EXIT_CODE)
+                else:
+                    self.assertLess(result["exit_code"], 0)
                 self.assertLess(time.monotonic() - started, TIMEOUT)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(read_json(invocation_file)["pid"], 0)
+                self.wait_for_pid_exit(server, read_json(invocation_file)["pid"])
                 status = self.call("codex_status", task_id=method)
                 self.assertEqual(status["status"], "cancelled")
                 self.assertFalse(status["alive"])
+
+    def wait_for_pid_exit(self, server, pid):
+        deadline = time.monotonic() + TIMEOUT
+        while server.pid_alive(pid):
+            self.assertLess(time.monotonic(), deadline, f"PID {pid} did not exit")
+            time.sleep(0.025)
+
+    @unittest.skipUnless(WINDOWS, "Windows Job Object behavior")
+    def test_windows_cancel_from_another_server_reaps_descendants(self):
+        request = self.send_tool("codex_dispatch", task_id="Tree", workdir=str(self.root), spec="slow tree")
+        descendant = self.sync / "descendant"
+        self.await_files(descendant)
+        meta = self.await_meta("Tree", lambda item: bool(item.get("windows_job")))
+        self.assertTrue(self.call("codex_status", task_id="Tree")["alive"])
+        self.call("codex_dispatch", error=True, task_id="tree", workdir=str(self.root), spec="duplicate")
+
+        with mock.patch.dict(os.environ, self.env):
+            server = load_server()
+        # A PID alone, even a live one, cannot be used for cross-instance cancellation.
+        self.assertFalse(server.terminate_process_group(None, pid=os.getpid()))
+        result, error = server.handle_codex_cancel({"task_id": "Tree"})
+        self.assertFalse(error)
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(self.tool_result(request)["status"], "cancelled")
+        self.wait_for_pid_exit(server, meta["pid"])
+        self.wait_for_pid_exit(server, int(descendant.read_text()))
+
+    @unittest.skipUnless(WINDOWS, "Windows Job Object cleanup after a host stops")
+    def test_windows_closing_stdio_reaps_active_descendants(self):
+        self.send_tool("codex_dispatch", task_id="host-exit", workdir=str(self.root), spec="slow tree")
+        descendant = self.sync / "descendant"
+        self.await_files(descendant)
+        meta = self.await_meta("host-exit", lambda item: bool(item.get("windows_job")))
+        self.process.stdin.close()
+        self.assertEqual(self.process.wait(timeout=TIMEOUT), 0)
+        server = load_server()
+        self.wait_for_pid_exit(server, meta["pid"])
+        self.wait_for_pid_exit(server, int(descendant.read_text()))
+
+    @unittest.skipUnless(WINDOWS, "Windows closes job handles after a host is killed")
+    def test_windows_host_crash_reaps_active_descendants(self):
+        self.send_tool("codex_dispatch", task_id="host-crash", workdir=str(self.root), spec="slow tree")
+        descendant = self.sync / "descendant"
+        self.await_files(descendant)
+        meta = self.await_meta("host-crash", lambda item: bool(item.get("windows_job")))
+        self.server_killed = True
+        self.process.kill()
+        self.assertNotEqual(self.process.wait(timeout=TIMEOUT), 0)
+        server = load_server()
+        self.wait_for_pid_exit(server, meta["pid"])
+        self.wait_for_pid_exit(server, int(descendant.read_text()))
 
     def test_dispatch_validation_errors(self):
         cases = [
@@ -1204,6 +1277,7 @@ class FailureSummaryTests(unittest.TestCase):
 
 
 class ExecutableResolutionTests(unittest.TestCase):
+    @unittest.skipIf(WINDOWS, "Unix executable lookup precedence")
     def test_resolution_order_uses_augmented_path_and_home_fallbacks(self):
         server = load_server()
         paths = ["/custom/codex", "/augmented/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
@@ -1212,7 +1286,9 @@ class ExecutableResolutionTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CODEX_BIN": paths[0]}), \
                 mock.patch.object(server, "build_env", return_value={"PATH": "/augmented"}), \
                 mock.patch.object(server.Path, "home", return_value=Path("/test-home")), \
-                mock.patch.object(server.shutil, "which", return_value=paths[1]) as which, \
+                mock.patch.object(shutil, "which", side_effect=lambda name, **kwargs: (
+                    paths[1] if name == "codex" else (name if name in candidates else None)
+                )) as which, \
                 mock.patch.object(server.os.path, "isfile", side_effect=candidates.__contains__), \
                 mock.patch.object(server.os, "access", return_value=True):
             for path in paths:
@@ -1220,7 +1296,23 @@ class ExecutableResolutionTests(unittest.TestCase):
                 candidates.remove(path)
             with self.assertRaisesRegex(RuntimeError, "codex executable not found"):
                 server.resolve_codex_bin()
-            which.assert_called_with("codex", path="/augmented")
+            which.assert_any_call("codex", path="/augmented")
+
+    @unittest.skipUnless(WINDOWS, "Native Windows executable lookup")
+    def test_windows_resolution_preserves_drive_paths_and_prefers_native_exe(self):
+        server = load_server()
+        with tempfile.TemporaryDirectory() as root:
+            shims = Path(root) / "npm shims"
+            native = Path(root) / "原生 binary"
+            shims.mkdir()
+            native.mkdir()
+            (shims / "codex.cmd").touch()
+            executable = native / "codex.exe"
+            executable.touch()
+            original_path = os.pathsep.join(map(str, (shims, native)))
+            with mock.patch.dict(os.environ, {"CODEX_BIN": str(shims / "codex.cmd"), "PATH": original_path}):
+                self.assertEqual(server.build_env()["PATH"], original_path)
+                self.assertEqual(server.resolve_codex_bin(), str(executable))
 
 
 if __name__ == "__main__":

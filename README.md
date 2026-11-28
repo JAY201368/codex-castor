@@ -63,6 +63,8 @@ The server uses newline-delimited JSON-RPC 2.0 over stdio and handles each tool 
 
 You need **Python 3.9+**, **Git**, a working **Codex CLI** with its account configured, and **Antigravity**.
 
+### macOS and Linux
+
 ```sh
 git clone https://github.com/JAY201368/codex-castor.git && cd codex-castor && ./scripts/install.sh
 ```
@@ -75,9 +77,25 @@ The installer registers the hook in `~/.gemini/config/hooks.json` and backs up t
 python3 scripts/doctor.py
 ```
 
+### Windows 11 x64
+
+Install [Python for Windows](https://www.python.org/downloads/windows/) with the `py` launcher, [Git for Windows](https://git-scm.com/install/windows), the [native Codex CLI](https://learn.chatgpt.com/docs/codex/cli), and [Antigravity](https://antigravity.google/download). Run these commands in PowerShell. The example enables the optional Antigravity CLI status line.
+
+```powershell
+git clone https://github.com/JAY201368/codex-castor.git
+Set-Location codex-castor
+py -3 scripts/install.py --install-statusline
+```
+
+Restart Antigravity, then run `py -3 scripts/doctor.py`. If `codex.exe` is outside `PATH`, pass its full path with `--codex-bin 'C:\path\to\codex.exe'`. Use `py -3 scripts/install.py` again to upgrade after pulling changes. Include `--install-statusline` when upgrading the optional status line. Use `py -3 scripts/install.py --uninstall` to remove the integration. Add `--purge-state` to also remove its saved state. Windows uses the regular Git, Python, and Codex executables from PowerShell and works without WSL or Git Bash.
+
+### Installation options
+
 For local development, run `python3 scripts/install.py --symlink` to link installed files to the checkout. Use `--gemini-dir PATH` for a custom Gemini directory, `--python PATH` or `--codex-bin PATH` to select executables, `--skip-gemini-md` to skip the global instructions, and `--dry-run` to preview changes. Pass the same `--gemini-dir` to Doctor if you used a custom directory. Add `--json` for machine-readable diagnostics.
 
-**Manual setup.** Merge the `codex-castor` entry from [the example config](config/mcp_config.example.json) into `~/.gemini/config/mcp_config.json`. Point `command` to Python 3.9+ and set the server argument to the absolute path of either the repository's `mcp/server.py` or an installed copy. Keep `telemetry.py`, `report.schema.json`, and `monitor.html` beside `server.py`. For an installed copy, place `analytics.py` and executable `hook.py` there too. From the checkout, use `scripts/analytics.py` and `scripts/hook.py`. Set `CODEX_BIN` to your executable. Install the [orchestrator skill](skills/codex-orchestrator/SKILL.md) at `~/.gemini/config/skills/codex-orchestrator/SKILL.md` and merge the [global protocol](config/GEMINI.md) into `~/.gemini/GEMINI.md`.
+On Windows, use `py -3` in the same commands. Copying is the default. The optional `--symlink` requires Windows Developer Mode or permission to create symlinks. Use `--force-statusline` when you want the installer to replace an existing custom status line.
+
+**Manual setup on macOS or Linux.** Merge the `codex-castor` entry from [the example config](config/mcp_config.example.json) into `~/.gemini/config/mcp_config.json`. Point `command` to Python 3.9+ and set the server argument to the absolute path of either the repository's `mcp/server.py` or an installed copy. Keep `telemetry.py`, `castor_platform.py`, `windows_process.py`, `report.schema.json`, and `monitor.html` beside `server.py`. For an installed copy, place `analytics.py` and executable `hook.py` there too. From the checkout, use `scripts/analytics.py` and `scripts/hook.py`. Set `CODEX_BIN` to your executable. Install the [orchestrator skill](skills/codex-orchestrator/SKILL.md) at `~/.gemini/config/skills/codex-orchestrator/SKILL.md` and merge the [global protocol](config/GEMINI.md) into `~/.gemini/GEMINI.md`. On Windows the Python installer generates the native MCP entry and shell commands.
 
 Merge this entry into `~/.gemini/config/hooks.json` and substitute the absolute Python and hook paths.
 
@@ -103,7 +121,7 @@ python3 scripts/install.py --uninstall
 
 ### Live monitoring & analytics
 
-- **Terminal.** Run `python3 scripts/watch.py` for the live dashboard or `python3 scripts/watch.py --follow` to follow a task’s event stream. Pass a task ID after `--follow` to select it explicitly.
+- **Terminal.** Run `python3 scripts/watch.py` for the live dashboard or `python3 scripts/watch.py --follow` to follow a task’s event stream. On Windows run `py -3 scripts/watch.py` or `py -3 scripts/watch.py --follow`. Pass a task ID after `--follow` to select it explicitly.
 - **Antigravity CLI.** Install with `--install-statusline` to show active tasks below the built-in bar (`stack_with_default: true`). The Castor status line stays silent when idle.
 - **Antigravity App.** Open **Codex Monitor** in the side panel or full-page view. The `codex_monitor` tool links to `ui://codex-castor/monitor.html`, advertised by `resources/list`. The app refreshes via `tools/call` every 1 second when any task is active or the selected task is live, and every 8 seconds when idle, at zero LLM tokens.
   - **Tasks** shows an active section and collapsible **By Project** groups for settled tasks, newest first by finish time. Cards show model and effort pills, recent activity, and concise failure reasons when available. Open a session for configuration, per-round runtime and usage, prompt history, the activity stream, and evaluation. The prompt and stream have expanded reading views. Rate, select a verdict, or leave a note inline. Use **Cancel** and confirm to stop a running task.
@@ -114,7 +132,7 @@ The server resolves each **effective model and reasoning effort** field from the
 
 #### Telemetry & analytics CLI
 
-Use the CLI to compare dispatch results and user ratings across models, reasoning levels, or projects before choosing settings for the next task. Run these commands from the repository. Every subcommand accepts `--state-dir PATH` to override the runtime directory.
+Use the CLI to compare dispatch results and user ratings across models, reasoning levels, or projects before choosing settings for the next task. Run these commands from the repository, using `py -3` in place of `python3` on Windows. Every subcommand accepts `--state-dir PATH` to override the runtime directory.
 
 ```text
 python3 scripts/analytics.py summary [--model MODEL] [--effort EFFORT] [--project PROJECT] [--since YYYY-MM-DD] [--limit N] [--json]
@@ -140,7 +158,7 @@ All seven tools use `eager: true` in the Antigravity configuration. Background m
 | `codex_resume` | `always` | `task_id` or `session_id` plus `workdir`, and `feedback` or `feedback_file`. Optional `model`, `reasoning_effort`. | Send concrete review feedback to an existing session. |
 | `codex_feedback` | `off` | Required `task_id`. Optional `rating` (integer 1–5), `verdict` (`accepted`, `rework`, `partial`, `rejected`, `abandoned`), `tags` (string array), `notes`, `user_first_prompt`, and `round` (positive integer, defaults to current round). | Record or update task feedback or store the user's first reply verbatim for a finished round. Syncs `meta.json` and the telemetry exports. |
 | `codex_status` | `off` | `task_id` for one task or `limit` for recent tasks (default 20). | Take a one-off snapshot on explicit request or during post-mortem debugging. |
-| `codex_cancel` | `off` | `task_id`. | Terminate the running Codex process group with `SIGTERM`, then `SIGKILL` if it persists. |
+| `codex_cancel` | `off` | `task_id`. | Stop Codex and its child processes. Windows uses a Job Object. macOS and Linux send `SIGTERM`, then `SIGKILL` if needed. |
 | `codex_cleanup_worktree` | `off` | `task_id`. Optional `delete_branch` and `force`, both defaulting to `false`. | Remove a managed worktree after review and merge, or after deciding to discard it. Force can discard local changes and delete an unmerged branch. |
 | `codex_monitor` | `off` | Optional `task_id`, `limit` (non-negative integer, default 20), and `include_detail` (boolean, default `false`). | Open the Tasks and Analytics views in Antigravity App, or get a structured snapshot with effective model and effort, elapsed time, activity, and analytics. With `task_id` and `include_detail: true`, returns `task_detail` with prompt history and activity within the response size budget. |
 
@@ -191,6 +209,8 @@ Both dispatch and resume pass `--dangerously-bypass-approvals-and-sandbox` and `
 python3 -m unittest discover -s tests -v
 python3 scripts/doctor.py --repo-only
 ```
+
+On Windows, run the same checks with `py -3 -X utf8 -m unittest discover -s tests -v` and `py -3 scripts/doctor.py --repo-only`. The [Windows 11 x64 verification guide](docs/windows-testing.md) covers the test fixtures, CI matrix, and the live Antigravity App and CLI checks.
 
 ---
 

@@ -1180,7 +1180,7 @@ function configuration(c) {
   pair("Model", sourced("model")); pair("Reasoning effort", sourced("reasoning_effort"));
   const workspace = node("div");
   const dir = c.effective_workdir || c.requested_workdir || c.workdir || "";
-  workspace.append(c.project || dir.split("/").filter(Boolean).pop() || "—", node("div", "muted mono", dir));
+  workspace.append(c.project || dir.split(/[\\/]/).filter(Boolean).pop() || "—", node("div", "muted mono", dir));
   if (c.requested_workdir && c.requested_workdir !== dir) workspace.append(node("div", "muted", "Requested · " + c.requested_workdir));
   pair("Workspace", workspace);
   const branch = node("div", "chips");

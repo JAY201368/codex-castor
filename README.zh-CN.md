@@ -63,6 +63,8 @@ flowchart LR
 
 运行前需准备好 **Python 3.9+**、**Git**、已登录的本地 **Codex CLI** 与 **Antigravity**。
 
+### macOS 和 Linux
+
 ```sh
 git clone https://github.com/JAY201368/codex-castor.git && cd codex-castor && ./scripts/install.sh
 ```
@@ -75,9 +77,25 @@ git clone https://github.com/JAY201368/codex-castor.git && cd codex-castor && ./
 python3 scripts/doctor.py
 ```
 
+### Windows 11 x64
+
+安装带 `py` 启动器的 [Windows 版 Python](https://www.python.org/downloads/windows/)、[Git for Windows](https://git-scm.com/install/windows)、[原生 Codex CLI](https://learn.chatgpt.com/docs/codex/cli) 和 [Antigravity](https://antigravity.google/download)。在 PowerShell 中运行以下命令。示例同时启用可选的 Antigravity CLI 状态栏。
+
+```powershell
+git clone https://github.com/JAY201368/codex-castor.git
+Set-Location codex-castor
+py -3 scripts/install.py --install-statusline
+```
+
+重启 Antigravity，然后运行 `py -3 scripts/doctor.py`。如果 `codex.exe` 不在 `PATH` 上，安装时用 `--codex-bin 'C:\path\to\codex.exe'` 指定绝对路径。拉取更新后重新运行安装器即可升级，已启用状态栏时加上 `--install-statusline` 一并更新。用 `py -3 scripts/install.py --uninstall` 卸载集成，如需一并删除保留的运行状态，再加上 `--purge-state`。整个流程使用 Windows 原生工具，无需 WSL 或 Git Bash。
+
+### 安装选项
+
 开发时可用 `python3 scripts/install.py --symlink`，让安装文件链接到本地仓库。用 `--gemini-dir PATH` 指定 Gemini 目录，`--python PATH` 或 `--codex-bin PATH` 指定可执行文件，`--skip-gemini-md` 跳过全局说明文件，`--dry-run` 预览改动。自定义了 Gemini 目录时，给 Doctor 传入相同的 `--gemini-dir`。用 `--json` 获取机器可读的诊断结果。
 
-**手动接入。** 将[示例配置](config/mcp_config.example.json)中的 `codex-castor` 条目合并到 `~/.gemini/config/mcp_config.json`。将 `command` 指向 Python 3.9+，把服务端参数设为仓库内 `mcp/server.py` 或其安装副本的绝对路径。`telemetry.py`、`report.schema.json` 和 `monitor.html` 应与 `server.py` 同目录。使用安装副本时，把 `analytics.py` 和可执行的 `hook.py` 也放在该目录。从仓库运行时，使用 `scripts/analytics.py` 和 `scripts/hook.py`。设置 `CODEX_BIN` 指向 Codex 可执行文件。将[编排技能](skills/codex-orchestrator/SKILL.md)装入 `~/.gemini/config/skills/codex-orchestrator/SKILL.md`，把[全局协议](config/GEMINI.md)合并到 `~/.gemini/GEMINI.md`。
+Windows 上用 `py -3` 执行上述命令。默认复制文件，可选的 `--symlink` 需要开启 Windows 开发人员模式或具备创建符号链接的权限。需要替换已有自定义状态栏时，加上 `--force-statusline`。
+
+**在 macOS 或 Linux 上手动接入。** 将[示例配置](config/mcp_config.example.json)中的 `codex-castor` 条目合并到 `~/.gemini/config/mcp_config.json`。将 `command` 指向 Python 3.9+，把服务端参数设为仓库内 `mcp/server.py` 或其安装副本的绝对路径。`telemetry.py`、`castor_platform.py`、`windows_process.py`、`report.schema.json` 和 `monitor.html` 应与 `server.py` 同目录。使用安装副本时，把 `analytics.py` 和可执行的 `hook.py` 也放在该目录。从仓库运行时，使用 `scripts/analytics.py` 和 `scripts/hook.py`。设置 `CODEX_BIN` 指向 Codex 可执行文件。将[编排技能](skills/codex-orchestrator/SKILL.md)装入 `~/.gemini/config/skills/codex-orchestrator/SKILL.md`，把[全局协议](config/GEMINI.md)合并到 `~/.gemini/GEMINI.md`。Windows 安装器会生成对应的 MCP 配置和 shell 命令。
 
 将以下条目合并到 `~/.gemini/config/hooks.json`，并替换 Python 和钩子的绝对路径。
 
@@ -103,7 +121,7 @@ python3 scripts/install.py --uninstall
 
 ### 实时监控与分析
 
-- **终端。** 运行 `python3 scripts/watch.py` 打开实时看板，或用 `python3 scripts/watch.py --follow` 跟踪任务事件流。也可在 `--follow` 后加任务 ID，直接跟踪指定任务。
+- **终端。** 运行 `python3 scripts/watch.py` 打开实时看板，或用 `python3 scripts/watch.py --follow` 跟踪任务事件流。Windows 上用 `py -3 scripts/watch.py` 或 `py -3 scripts/watch.py --follow`。在 `--follow` 后加任务 ID 可跟踪指定任务。
 - **Antigravity CLI。** 安装时加 `--install-statusline`，运行中的任务会显示在内置状态栏下方（`stack_with_default: true`）。空闲时不显示任务行。
 - **Antigravity App。** 在侧栏或整页打开 **Codex Monitor**。`codex_monitor` 关联的 `ui://codex-castor/monitor.html` 可通过 `resources/list` 发现。有任务运行或当前选中的任务仍在运行时，看板经 `tools/call` 每 1 秒刷新一次，空闲时每 8 秒一次，不消耗模型 token。
   - **Tasks（任务）** 包含运行中区域，已结束的任务在可折叠的 **By Project（按项目）** 分组中按结束时间从近到远排列。任务卡片展示模型与推理强度标签、近期活动，以及可用的失败原因摘要。打开会话可查看配置、各轮用时与用量、提示词历史、活动流和评估。提示词和活动流可展开阅读。可直接评分、选择评审结论或填写备注。点击 **Cancel（取消）** 并确认即可停止运行中的任务。
@@ -114,7 +132,7 @@ python3 scripts/install.py --uninstall
 
 #### 运行指标与分析命令行工具
 
-用命令行工具按模型、推理等级或项目比较派发结果与用户评分，为下一次任务选择配置。在仓库目录运行下列命令。每个子命令都接受 `--state-dir PATH`，用于指定运行状态目录。
+用命令行工具按模型、推理等级或项目比较派发结果与用户评分，为下一次任务选择配置。在仓库目录运行下列命令，Windows 上将 `python3` 换成 `py -3`。每个子命令都接受 `--state-dir PATH`，用于指定运行状态目录。
 
 ```text
 python3 scripts/analytics.py summary [--model MODEL] [--effort EFFORT] [--project PROJECT] [--since YYYY-MM-DD] [--limit N] [--json]
@@ -140,7 +158,7 @@ python3 scripts/analytics.py export [--md PATH] [--csv PATH]
 | `codex_resume` | `always` | `task_id`，或同时提供 `session_id` 与 `workdir`。还需提供 `feedback` 或 `feedback_file`。可选 `model`、`reasoning_effort`。 | 将具体审查意见交回已有的 Codex 会话。 |
 | `codex_feedback` | `off` | 必填 `task_id`。可选 `rating`（1 至 5 的整数）、`verdict`（`accepted`、`rework`、`partial`、`rejected`、`abandoned`）、`tags`（字符串数组）、`notes`、`user_first_prompt` 和 `round`（正整数，默认为当前轮）。 | 记录或更新任务反馈，或逐字保存一轮结束后用户的首条回复，同步 `meta.json` 和运行指标导出文件。 |
 | `codex_status` | `off` | 用 `task_id` 查看单项任务，或用 `limit` 列出近期任务（默认 20 项）。 | 用户明确询问进度或事后排查时，查询一次状态。 |
-| `codex_cancel` | `off` | `task_id`。 | 向运行中的 Codex 进程组发送 `SIGTERM`，若进程仍未退出，再发送 `SIGKILL`。 |
+| `codex_cancel` | `off` | `task_id`。 | 停止 Codex 及其后代进程。Windows 使用 Job Object。macOS 和 Linux 先发送 `SIGTERM`，必要时发送 `SIGKILL`。 |
 | `codex_cleanup_worktree` | `off` | `task_id`。可选 `delete_branch`、`force`，默认均为 `false`。 | 审查并合并改动后，或决定放弃改动后，移除任务对应的托管 Git worktree；开启 force 可能丢弃未提交改动并强删未合并分支。 |
 | `codex_monitor` | `off` | 可选 `task_id`、`limit`（非负整数，默认 20）和 `include_detail`（布尔值，默认 `false`）。 | 在 Antigravity App 打开任务与分析视图，或读取结构化快照，查看实际使用的模型、推理强度、已用时间、活动和分析数据。提供 `task_id` 和 `include_detail: true` 时返回 `task_detail`，在响应大小限制内包含提示词历史与活动流。 |
 
@@ -191,6 +209,8 @@ python3 scripts/analytics.py export [--md PATH] [--csv PATH]
 python3 -m unittest discover -s tests -v
 python3 scripts/doctor.py --repo-only
 ```
+
+Windows 上运行 `py -3 -X utf8 -m unittest discover -s tests -v` 和 `py -3 scripts/doctor.py --repo-only`。[Windows 11 x64 验收指南](docs/windows-testing.md#中文)包含测试依赖、CI 矩阵，以及 Antigravity App 和 CLI 的实机流程。
 
 ---
 

@@ -15,6 +15,7 @@ from statusline import (
     LIVE_STATUSES, TaskSettings, activity, clean, clock, codex_home, config_differences,
     elapsed, object_value, pid_alive, read_meta, recency, reverse_lines, scan_tasks, state_dir, timestamp, trim,
 )
+from castor_platform import configure_stdio, enable_terminal_sequences
 
 
 ICONS = {"completed": "✓", "failed": "✗", "cancelled": "⊘", "interrupted": "⊘"}
@@ -253,7 +254,7 @@ def follow(args, color):
         latest["task_id"] = task_id
         now = time.time()
         status = latest.get("status")
-        latest["alive"] = status in LIVE_STATUSES and pid_alive(latest.get("pid"))
+        latest["alive"] = status in LIVE_STATUSES and pid_alive(latest.get("pid"), latest.get("windows_job"))
         updated = timestamp(latest.get("updated_at") or latest.get("created_at"))
         # The process may exit before the server finishes writing its final metadata.
         stale = not latest["alive"] and updated is not None and now - updated > 30
@@ -312,6 +313,7 @@ def dashboard(args, color, tty):
 
 
 def main():
+    configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", default=state_dir())
     parser.add_argument("--codex-home", default=codex_home())
@@ -332,7 +334,7 @@ def main():
         parser.error("--json requires dashboard mode with --once")
     args.state_dir = os.path.expanduser(args.state_dir)
     args.codex_home = os.path.expanduser(args.codex_home)
-    tty = sys.stdout.isatty()
+    tty = enable_terminal_sequences()
     color = args.color or (tty and not args.no_color and "NO_COLOR" not in os.environ)
     try:
         return follow(args, color) if args.follow is not None else dashboard(args, color, tty)

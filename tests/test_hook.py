@@ -460,9 +460,10 @@ class HookSubprocessTests(unittest.TestCase):
         self.assertFalse(self.state_root.exists())
         self.invoke(transcript=self.root / "no-file")
         self.invoke(transcript=self.root)
-        fifo = self.root / "fifo"
-        os.mkfifo(fifo)
-        self.invoke(transcript=fifo)
+        if hasattr(os, "mkfifo"):
+            fifo = self.root / "fifo"
+            os.mkfifo(fifo)
+            self.invoke(transcript=fifo)
         self.invoke(transcriptPath="bad\0path")
         self.assertFalse(self.state_path().exists())
         standalone = self.root / "hook.py"
